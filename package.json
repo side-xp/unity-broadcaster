@@ -1,8 +1,8 @@
 {
-  "name": "com.side-xp.@todo",
+  "name": "com.side-xp.broadcaster",
   "version": "0.0.0",
-  "description": "@todo",
-  "displayName": "SideXP - @todo",
+  "description": "Asset-based event communication system. ",
+  "displayName": "SideXP - Broadcaster",
   "unity": "2021.3",
   "author": {
     "name": "Sideways Experiments",

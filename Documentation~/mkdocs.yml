@@ -1,4 +1,4 @@
-site_name: Sideways Experiments Unity Package (@todo)
+site_name: Broadcaster for Unity
 docs_dir: Documentation~
 theme:
   name: readthedocs
