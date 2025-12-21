@@ -1,0 +1,69 @@
+# This workflow takes the content of the Documentation~/ directory, and uses MkDocs to generate a static website from MarkDown files (*.md).
+# Once built, the website is then deployed to GitHub Pages.
+# Make sure you have selected "GitHub Actions" mode in Settings > Pages.
+# After running this workflow, the website should be accessible at https://[username].github.io/[repository-name]
+name: Build & deploy docs
+
+# Trigger workflow whenever something is pushed on main, assuming only final versions are pushed to that branch
+on:
+  push:
+    branches:
+      - main
+      - master
+      - release
+
+# Setup permissions for this workflow.
+permissions:
+  id-token: write
+  pages: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    name: Build & deploy docs
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Install Python for this workflow
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # Install MkDocs. If you want to use a specific theme, add it to this install command.
+      # Example: pip install mkdocs mkdocs-bootswatch
+      - name: Install MkDocs
+        run: pip install mkdocs
+
+      # Create a separate release/docs/ folder that will contain the content of the Documentation~/ folder
+      # This is used to extract the mkdocs.yml file, since MkDocs doesn't allow it to be part of the root directory
+      - name: Prepare docs folder & build
+        run: |
+          mkdir -p docs
+          cp -a "Documentation~" "docs"
+          mv "docs/Documentation~/mkdocs.yml" "docs"
+          cd docs
+          mkdocs build --strict
+
+      # Configure GitHub Pages
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      # Upload the MkDocs build output (which by default is in a site/ folder)
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/site
+
+      # Deploy the website to GitHub Pages
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
+
+      # Display output link
+      - name: Feedback
+        run: |
+          echo "Documentation website successfully deployed at https://${{github.repository_owner}}.github.io/${{github.event.repository.name}}"

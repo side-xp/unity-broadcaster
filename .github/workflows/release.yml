@@ -1,0 +1,100 @@
+# This workflow will create a GitHub Release with only the "useful" files inside it. Any file that is not required for the package (eg.
+# workflows from the .github/ folder) will be excluded.
+# Also, this workflow will output a ZIP and a Tarball achives in the Release entry, plus the documentation in a separate folder.
+name: Release package
+
+# Trigger workflow whenever something is pushed on main, assuming only final versions are pushed to that branch.
+on:
+  push:
+    branches:
+      - main
+      - master
+      - release
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Read the content of the package.json file:
+      # - Extract the "name" property, which will also be used for archive files name
+      # - Extract the "version" property if it exists
+      - name: Read package.json
+        id: pkg
+        run: |
+          PKG_PATH="package.json"
+          NAME=$(jq -r .name "$PKG_PATH")
+          VERSION=$(jq -r .version "$PKG_PATH")
+          echo "package_name=$NAME" >> $GITHUB_OUTPUT
+          echo "package_version=$VERSION" >> $GITHUB_OUTPUT
+
+      # Create a release/package/ folder that will contain only the "useful" files (exclude .github/, .vscode/, etc.)
+      - name: Prepare package folder
+        run: |
+          mkdir -p release/package
+          rsync --prune-empty-dirs -a ./ release/package/ \
+            --exclude ".git*" \
+            --exclude ".github" \
+            --exclude ".vscode" \
+            --exclude ".editorconfig" \
+            --exclude ".gitignore" \
+            --exclude ".vsconfig"
+
+      # Create a separate release/docs/ folder that will contain the content of the Documentation~/ folder
+      # Note that the Documentation~/ folder is included in the package's source anyway.
+      - name: Prepare docs folder
+        run: |
+          mkdir -p release/docs
+          cp -a "Documentation~" "release/docs"
+          rm "release/docs/Documentation~/mkdocs.yml"
+
+      # Create a ZIP archive with the content of the release/package/ folder
+      # That archive file is named [package-name].zip
+      - name: Output package as ZIP archive
+        id: pkg_zip
+        run: |
+          PKG_ZIP_PATH=${{ steps.pkg.outputs.package_name }}.zip
+          echo "path=$PKG_ZIP_PATH" >> $GITHUB_OUTPUT
+          cd release/package
+          zip -r ../$PKG_ZIP_PATH .
+          cd ../..
+
+      # Create a Tarball archive with the content of the release/package/ folder
+      # That archive file is named [package-name].tar.gz
+      - name: Output package as tarball
+        id: pkg_targz
+        run: |
+          PKG_TARGZ_PATH="${{ steps.pkg.outputs.package_name }}.tar.gz"
+          echo "path=$PKG_TARGZ_PATH" >> $GITHUB_OUTPUT
+          cd release/package
+          tar -czf ../$PKG_TARGZ_PATH .
+          cd ../..
+
+      # Create a ZIP archive with the content of the release/docs/ folder
+      # That archive file is named Documentation_vX.Y.Z.zip
+      - name: Output docs as ZIP archive
+        id: docs_zip
+        run: |
+          DOCS_PATH="Documentation_v${{steps.pkg.outputs.package_version}}.zip"
+          echo "path=$DOCS_PATH" >> $GITHUB_OUTPUT
+          cd release/docs
+          zip -r -q ../$DOCS_PATH ./*
+          cd ../..
+
+      # Create a GitHub Release entry 
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{steps.pkg.outputs.package_version}}"
+          tag_name: "v${{steps.pkg.outputs.package_version}}"
+          files: |
+            release/${{ steps.pkg_zip.outputs.path }}
+            release/${{ steps.pkg_targz.outputs.path }}
+            release/${{ steps.docs_zip.outputs.path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

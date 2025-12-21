@@ -1,0 +1,5 @@
+site_name: Sideways Experiments Unity Package (@todo)
+docs_dir: Documentation~
+theme:
+  name: readthedocs
+  logo: ./img/logo.png

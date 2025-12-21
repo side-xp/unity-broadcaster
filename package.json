@@ -1,0 +1,12 @@
+{
+  "name": "com.side-xp.@todo",
+  "version": "0.0.0",
+  "description": "@todo",
+  "displayName": "SideXP - @todo",
+  "unity": "2021.3",
+  "author": {
+    "name": "Sideways Experiments",
+    "email": "dev@side-xp.com",
+    "url": "https://side-xp.com"
+  }
+}

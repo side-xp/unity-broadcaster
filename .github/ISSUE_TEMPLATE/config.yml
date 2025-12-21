@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Read the community guidelines
+    about: "Please make sure you have read the submission guidelines before posting an issue"
+    url: https://github.com/OWNER_NAME/PACKAGE_NAME/blob/main/CONTRIBUTING.md
+  - name: Want to start a discussion?
+    about: "Join our Discord server to start chatting with the community and the core team"
+    url: https://discord.gg/bMK2d47JaE
+  - name: Contact us
+    url: mailto:dev@sideways-experiments.com
+    about: "Feel free to contact us if you need any help or want to know more about our work"
