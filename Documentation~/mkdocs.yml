@@ -1,5 +1,0 @@
-site_name: Broadcaster for Unity
-docs_dir: Documentation~
-theme:
-  name: readthedocs
-  logo: ./img/logo.png

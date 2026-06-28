@@ -1,0 +1,7 @@
+# Files excluded from `git archive` output (used by the Release workflow to build the package archives).
+/.github       export-ignore
+/.vscode       export-ignore
+/.editorconfig export-ignore
+/.vsconfig     export-ignore
+.gitignore     export-ignore
+.gitattributes export-ignore

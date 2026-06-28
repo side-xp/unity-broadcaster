@@ -101,3 +101,8 @@ InitTestScene*.unity*
 # SideXP Library Project
 /Assets/_DEV/*
 !/Assets/_DEV/donotdelete~
+/Documentation~/.cache
+/Documentation~/api
+/Documentation~/site
+# Generated from the repo-root README.md by CI (see the release workflow); never edit by hand.
+/Documentation~/README.md
