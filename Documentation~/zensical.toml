@@ -2,7 +2,7 @@
 # https://zensical.org/docs/setup/basics/#settings
 
 [project]
-site_name = "SideXP - Unity Broadcaster package"
+site_name = "SideXP - Broadcaster (Unity)"
 site_description = "Asset-based event communication system."
 site_author = "Sideways Experiments"
 copyright = """

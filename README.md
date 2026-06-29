@@ -1,4 +1,4 @@
-# Broadcaster
+# SideXP - Broadcaster (Unity)
 
 Asset-based event communication system.
 

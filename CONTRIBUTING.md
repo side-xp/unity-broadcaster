@@ -52,7 +52,7 @@ instadoc \
 The documentation site's index page, `Documentation~/README.md`, is **generated from the repo-root [`README.md`](./README.md)** so the two never drift, and is therefore **not committed** (it's gitignored). CI rebuilds it on every docs build. The root README carries a few HTML-comment markers that the build interprets:
 
 - `<!-- docs:remove:start -->` … `<!-- docs:remove:end -->`: content shown only on GitHub (e.g. the "Complete documentation available at …" pointer), stripped from the docs site index.
-- `<!-- docs:only:start` … `docs:only:end -->`: content hidden on GitHub (it sits inside the comment) and shown only on the docs site — used to swap repo-relative links (`./CONTRIBUTING.md`, `./LICENSE.md`) for absolute ones that resolve on the published site.
+- `<!-- docs:only:start` … `docs:only:end -->`: content hidden on GitHub (it sits inside the comment) and shown only on the docs site. This is used to swap repo-relative links (`./CONTRIBUTING.md`, `./LICENSE.md`) for absolute ones that resolve on the published site.
 
 The build also rewrites links that point into `./Documentation~/` (used on GitHub to reach the docs from the repo root) so they resolve on the published site, where the index already lives at the `Documentation~/` root.
 
