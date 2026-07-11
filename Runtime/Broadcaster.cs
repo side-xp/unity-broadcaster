@@ -25,22 +25,52 @@ namespace SideXP.Broadcaster
         #region Public API
 
         /// <inheritdoc cref="EventBus.Emit{T}(T)"/>
-        public static void Emit<T>(T signal) where T : ISignal => Default.Emit(signal);
+        public static void Emit<T>(T signal) where T : ISignal
+        {
+            Default.Emit(signal);
+        }
 
-        /// <inheritdoc cref="EventBus.Subscribe{T}(object, Action{T})"/>
-        public static SubscriptionHandle Subscribe<T>(object owner, Action<T> listener) where T : ISignal => Default.Subscribe(owner, listener);
+        /// <inheritdoc cref="EventBus.Subscribe{T}(object, Action{T}, bool)"/>
+        public static SubscriptionHandle Subscribe<T>(object owner, Action<T> listener, bool init = false) where T : ISignal
+        {
+            return Default.Subscribe(owner, listener, init);
+        }
 
         /// <inheritdoc cref="EventBus.Unsubscribe{T}(Action{T})"/>
-        public static bool Unsubscribe<T>(Action<T> listener) where T : ISignal => Default.Unsubscribe(listener);
+        public static bool Unsubscribe<T>(Action<T> listener) where T : ISignal
+        {
+            return Default.Unsubscribe(listener);
+        }
+
+        /// <inheritdoc cref="EventBus.Provide{T}(object, Func{T}, bool)"/>
+        public static SubscriptionHandle Provide<T>(object owner, Func<T> provider, bool replace = false) where T : ISignal
+        {
+            return Default.Provide(owner, provider, replace);
+        }
+
+        /// <inheritdoc cref="EventBus.TryGetCurrent{T}(out T)"/>
+        public static bool TryGetCurrent<T>(out T current) where T : ISignal
+        {
+            return Default.TryGetCurrent(out current);
+        }
 
         /// <inheritdoc cref="EventBus.UnsubscribeAll(object)"/>
-        public static int UnsubscribeAll(object owner) => Default.UnsubscribeAll(owner);
+        public static int UnsubscribeAll(object owner)
+        {
+            return Default.UnsubscribeAll(owner);
+        }
 
         /// <inheritdoc cref="EventBus.Clear"/>
-        public static void Clear() => Default.Clear();
+        public static void Clear()
+        {
+            Default.Clear();
+        }
 
         /// <inheritdoc cref="EventBus.Clear{T}"/>
-        public static void Clear<T>() where T : IEvent => Default.Clear<T>();
+        public static void Clear<T>() where T : IEvent
+        {
+            Default.Clear<T>();
+        }
 
         #endregion
 

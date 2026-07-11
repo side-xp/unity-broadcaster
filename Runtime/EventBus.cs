@@ -41,6 +41,12 @@ namespace SideXP.Broadcaster
         /// </summary>
         private readonly List<Registration> _pendingRemovals = new List<Registration>();
 
+        /// <summary>
+        /// State providers, at most one per signal type. A provider answers "what is the current value of this signal?" so a listener
+        /// subscribing with <c>init</c> can pull it immediately.
+        /// </summary>
+        private readonly Dictionary<Type, Registration> _providers = new Dictionary<Type, Registration>();
+
         #endregion
 
 
@@ -98,8 +104,11 @@ namespace SideXP.Broadcaster
         /// <typeparam name="T">The exact signal type to listen for.</typeparam>
         /// <param name="owner">The owner of this registration (powers <see cref="UnsubscribeAll(object)"/> and diagnostics).</param>
         /// <param name="listener">The callback invoked on each emit.</param>
+        /// <param name="init">If true and a provider for <typeparamref name="T"/> is alive, the listener is invoked
+        /// immediately with that provider's current value (in addition to future emits). Does nothing if no provider is
+        /// alive. Only sees providers registered <i>before</i> this call.</param>
         /// <returns>A handle that unregisters this listener when disposed.</returns>
-        public SubscriptionHandle Subscribe<T>(object owner, Action<T> listener) where T : ISignal
+        public SubscriptionHandle Subscribe<T>(object owner, Action<T> listener, bool init = false) where T : ISignal
         {
             if (owner == null)
                 throw new ArgumentNullException(nameof(owner));
@@ -118,12 +127,28 @@ namespace SideXP.Broadcaster
             Registration registration = new Registration
             {
                 Bus = this,
+                Role = RegistrationRole.SignalListener,
                 EventType = type,
                 Owner = owner,
                 Callback = listener,
                 Active = true,
             };
             list.Add(registration);
+
+            // Pull the current value from a live provider, if the caller opted in.
+            if (init && TryGetCurrent(out T current))
+            {
+                try
+                {
+                    listener.Invoke(current);
+                }
+                catch (Exception exception)
+                {
+                    // Isolate the init call exactly like a dispatched one.
+                    Debug.LogException(exception, owner as UnityEngine.Object);
+                }
+            }
+
             return new SubscriptionHandle(registration);
         }
 
@@ -151,6 +176,83 @@ namespace SideXP.Broadcaster
                     return true;
                 }
             }
+            return false;
+        }
+
+        #endregion
+
+
+        #region State & providers
+
+        /// <summary>
+        /// Registers a provider for a signal type.<br/>
+        /// The state owner's answer to "what is the current value?". A listener subscribing with <c>init: true</c> pulls this value
+        /// immediately, and <see cref="TryGetCurrent{T}(out T)"/> reads it on demand. The provider is invoked lazily (never cached), so
+        /// its value is never stale, and it dies with its owner.
+        /// </summary>
+        /// <typeparam name="T">The exact signal type this provider supplies the current value for.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="provider">Returns the current value on demand.</param>
+        /// <param name="replace">By default, if you try to add a provider while another one already exists, this call is ignored. If
+        /// enabled, this provider supersedes it.</param>
+        /// <returns>A handle that unregisters this provider when disposed. When a provider already exists and <paramref name="replace"/>
+        /// is <c>false</c>, returns an inactive handle instead.</returns>
+        public SubscriptionHandle Provide<T>(object owner, Func<T> provider, bool replace = false) where T : ISignal
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (provider == null)
+                throw new ArgumentNullException(nameof(provider));
+
+            MainThreadGuard.Assert();
+
+            Type type = typeof(T);
+            if (_providers.TryGetValue(type, out Registration existing) && existing.Active)
+            {
+                if (!replace)
+                {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    Debug.LogError($"[Broadcaster] A provider for '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
+#endif
+                    return default;
+                }
+
+                // Supersede the incumbent: deactivate it so its handle and any pending removal become no-ops, then let the slot be
+                // overwritten below. The outgoing owner's later cleanup won't find it in the slot anymore.
+                existing.Active = false;
+            }
+
+            Registration registration = new Registration
+            {
+                Bus = this,
+                Role = RegistrationRole.Provider,
+                EventType = type,
+                Owner = owner,
+                Callback = provider,
+                Active = true,
+            };
+            _providers[type] = registration;
+            return new SubscriptionHandle(registration);
+        }
+
+        /// <summary>
+        /// Reads the current value for a signal type from its provider, without subscribing. Returns false (and <paramref name="current"/>
+        /// is <c>default</c>) if no provider is alive for the type.
+        /// </summary>
+        /// <typeparam name="T">The signal type to read the current value of.</typeparam>
+        /// <param name="current">The provider's current value, or <c>default</c> if none.</param>
+        /// <returns>True if a provider answered, false otherwise.</returns>
+        public bool TryGetCurrent<T>(out T current) where T : ISignal
+        {
+            MainThreadGuard.Assert();
+
+            if (_providers.TryGetValue(typeof(T), out Registration provider) && provider.Active)
+            {
+                current = ((Func<T>)provider.Callback).Invoke();
+                return true;
+            }
+
+            current = default;
             return false;
         }
 
@@ -185,6 +287,15 @@ namespace SideXP.Broadcaster
                         }
                     }
                 }
+
+                foreach (Registration provider in _providers.Values)
+                {
+                    if (provider.Active && ReferenceEquals(provider.Owner, owner))
+                    {
+                        Remove(provider);
+                        removed++;
+                    }
+                }
             }
             finally
             {
@@ -206,7 +317,11 @@ namespace SideXP.Broadcaster
                 foreach (Registration registration in list)
                     registration.Active = false;
             }
+            foreach (Registration provider in _providers.Values)
+                provider.Active = false;
+
             _signalRegistrations.Clear();
+            _providers.Clear();
             _pendingRemovals.Clear();
         }
 
@@ -224,6 +339,12 @@ namespace SideXP.Broadcaster
                 foreach (Registration registration in list)
                     registration.Active = false;
                 _signalRegistrations.Remove(type);
+            }
+
+            if (_providers.TryGetValue(type, out Registration provider))
+            {
+                provider.Active = false;
+                _providers.Remove(type);
             }
         }
 
@@ -245,14 +366,24 @@ namespace SideXP.Broadcaster
             if (_dispatchDepth > 0)
                 _pendingRemovals.Add(registration);
             else
-                RemoveFromList(registration);
+                RemoveFromStore(registration);
         }
 
         /// <summary>
-        /// Physically removes a registration from its type's list, dropping the list entry when it becomes empty.
+        /// Physically removes a registration from whichever store holds it (listener list or provider slot), dropping an
+        /// emptied list entry.
         /// </summary>
-        private void RemoveFromList(Registration registration)
+        private void RemoveFromStore(Registration registration)
         {
+            if (registration.Role == RegistrationRole.Provider)
+            {
+                // Only drop the slot if it still points at this exact registration — a newer provider may have replaced
+                // it while this one was pending removal.
+                if (_providers.TryGetValue(registration.EventType, out Registration current) && current == registration)
+                    _providers.Remove(registration.EventType);
+                return;
+            }
+
             if (_signalRegistrations.TryGetValue(registration.EventType, out List<Registration> list))
             {
                 list.Remove(registration);
@@ -270,7 +401,7 @@ namespace SideXP.Broadcaster
                 return;
 
             foreach (Registration registration in _pendingRemovals)
-                RemoveFromList(registration);
+                RemoveFromStore(registration);
             _pendingRemovals.Clear();
         }
 

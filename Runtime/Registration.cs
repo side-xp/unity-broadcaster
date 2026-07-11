@@ -4,6 +4,19 @@ namespace SideXP.Broadcaster
 {
 
     /// <summary>
+    /// What a <see cref="Registration"/> represents. Decides which store holds it and how it is removed. More roles
+    /// (command/request handler, cue performer) are added as those kinds land.
+    /// </summary>
+    internal enum RegistrationRole
+    {
+        /// <summary>A signal listener, held in the per-type listener list.</summary>
+        SignalListener,
+
+        /// <summary>A state provider, single per type, answering "what is the current value?".</summary>
+        Provider,
+    }
+
+    /// <summary>
     /// Internal record of a single registration on an <see cref="EventBus"/>.
     /// </summary>
     internal sealed class Registration
@@ -13,6 +26,11 @@ namespace SideXP.Broadcaster
         /// The bus this registration belongs to (so a <see cref="SubscriptionHandle"/> can unregister it).
         /// </summary>
         public EventBus Bus;
+
+        /// <summary>
+        /// What this registration is. Decides which store holds it and how it's removed.
+        /// </summary>
+        public RegistrationRole Role;
 
         /// <summary>
         /// The exact event type this registration is keyed on.
