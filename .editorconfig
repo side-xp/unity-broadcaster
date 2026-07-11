@@ -162,7 +162,9 @@ csharp_style_prefer_readonly_struct = true
 csharp_style_prefer_readonly_struct_member = true
 
 # Code-block preferences
-csharp_prefer_braces = true:warning
+# Allow brace-less single-line bodies (e.g. `if (x) return;`), but a multi-line
+# body without braces is an error.
+csharp_prefer_braces = when_multiline:error
 csharp_prefer_simple_using_statement = false:warning
 csharp_style_namespace_declarations = block_scoped:error
 csharp_style_prefer_method_group_conversion = true
