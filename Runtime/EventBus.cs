@@ -75,6 +75,7 @@ namespace SideXP.Broadcaster
         public void Emit<T>(T signal) where T : ISignal
         {
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
 
             if (!_signalRegistrations.TryGetValue(typeof(T), out List<Registration> list))
                 return;
@@ -129,6 +130,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(listener));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
 
             Type type = typeof(T);
             if (!_signalRegistrations.TryGetValue(type, out List<Registration> list))
@@ -195,6 +197,9 @@ namespace SideXP.Broadcaster
             if (listener == null)
                 return false;
 
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
             if (!_signalRegistrations.TryGetValue(typeof(T), out List<Registration> list))
                 return false;
 
@@ -235,6 +240,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(provider));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
 
             Type type = typeof(T);
             if (_providers.TryGetValue(type, out Registration existing) && existing.Active)
@@ -275,6 +281,7 @@ namespace SideXP.Broadcaster
         public bool TryGetCurrent<T>(out T current) where T : ISignal
         {
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
 
             if (_providers.TryGetValue(typeof(T), out Registration provider) && provider.Active)
             {
@@ -310,6 +317,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(handler));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
             return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, handler, replace, async: false);
         }
 
@@ -328,6 +336,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(handler));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
             return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, handler, replace, async: true);
         }
 
@@ -351,6 +360,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(handler));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
             // Store an invoker typed on the interface so the interface-typed Order can call it back without knowing the concrete command
             // type (the cast unboxes the command the caller passed as ICommand<TResult>).
             Func<ICommand<TResult>, TResult> invoker = command => handler((T)command);
@@ -373,6 +383,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(handler));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
             Func<ICommand<TResult>, Awaitable<TResult>> invoker = command => handler((T)command);
             return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, invoker, replace, async: true);
         }
@@ -387,6 +398,7 @@ namespace SideXP.Broadcaster
         public bool Order<T>(T command) where T : ICommand
         {
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
 
             if (_handlers.TryGetValue(typeof(T), out Registration registration) && registration.Active)
             {
@@ -448,6 +460,7 @@ namespace SideXP.Broadcaster
         public Awaitable OrderAsync<T>(T command, CancellationToken cancellation = default) where T : ICommand
         {
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
 
             if (cancellation.IsCancellationRequested)
                 return CanceledAwaitable();
@@ -538,6 +551,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(handler));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
             // Same interface-typed invoker trick as commands, so the interface-typed Ask can call back without the concrete request type.
             Func<IRequest<TResult>, TResult> invoker = request => handler((T)request);
             return RegisterHandler(typeof(T), RegistrationRole.RequestHandler, owner, invoker, replace, async: false);
@@ -559,6 +573,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(handler));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
             Func<IRequest<TResult>, Awaitable<TResult>> invoker = request => handler((T)request);
             return RegisterHandler(typeof(T), RegistrationRole.RequestHandler, owner, invoker, replace, async: true);
         }
@@ -685,6 +700,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(performer));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
             return AddPerformer(typeof(T), owner, performer);
         }
 
@@ -704,6 +720,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(performer));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
             return AddPerformer(typeof(T), owner, performer);
         }
 
@@ -724,6 +741,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(performer));
 
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
             return AddPerformer(typeof(T), owner, performer);
         }
 
@@ -742,6 +760,7 @@ namespace SideXP.Broadcaster
         public Awaitable Cue<T>(T cue, CancellationToken cancellation = default) where T : ICue
         {
             MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
 
             if (cancellation.IsCancellationRequested)
                 return CanceledAwaitable();
@@ -813,6 +832,8 @@ namespace SideXP.Broadcaster
             if (owner == null)
                 return 0;
 
+            MainThreadGuard.Assert();
+
             // Snapshot the owner's registrations before removing anything: removing one can resolve an in-flight async dispatch,
             // which resumes its awaiting caller synchronously — and that code may re-register on this bus, which would corrupt an
             // enumeration still walking the stores. No user-authored code can run during this collection pass.
@@ -865,6 +886,8 @@ namespace SideXP.Broadcaster
         /// </summary>
         public void Clear()
         {
+            MainThreadGuard.Assert();
+
             // Snapshot everything before touching anything: resolving the in-flight slots below resumes awaiting callers
             // synchronously, and those may re-register on this bus — the stores must not be under enumeration when that happens.
             List<Registration> all = new List<Registration>();
@@ -898,6 +921,9 @@ namespace SideXP.Broadcaster
         /// <typeparam name="T">The event type to clear.</typeparam>
         public void Clear<T>() where T : IEvent
         {
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
             Type type = typeof(T);
 
             // Detach and deactivate everything for the type first, and only then resolve the in-flight slots: resolving resumes

@@ -23,6 +23,17 @@ namespace SideXP.Broadcaster
         #endregion
 
 
+        #region Public API
+
+        /// <summary>
+        /// The shared default bus. Created lazily so the façade also works in edit mode, and recreated when entering play mode so a
+        /// disabled domain reload can't leak state from a previous play session.
+        /// </summary>
+        public static EventBus Default => s_default ??= new EventBus();
+
+        #endregion
+
+
         #region Signals
 
         /// <inheritdoc cref="EventBus.Emit{T}(T)"/>
@@ -209,17 +220,6 @@ namespace SideXP.Broadcaster
         {
             s_default = new EventBus();
         }
-
-        #endregion
-
-
-        #region Internal API
-
-        /// <summary>
-        /// The shared default bus. Created lazily so the façade also works in edit mode, and recreated when entering play mode so a
-        /// disabled domain reload can't leak state from a previous play session.
-        /// </summary>
-        internal static EventBus Default => s_default ??= new EventBus();
 
         #endregion
 

@@ -192,6 +192,33 @@ namespace SideXP.Broadcaster.Tests
             Assert.AreEqual(1, derivedCalls);
         }
 
+        [Test]
+        public void Emit_InterfaceTypeArgument_LogsDevError()
+        {
+            // The silent-miss trap of exact-type dispatch: a variable declared as the marker interface infers the type argument
+            // as the interface itself, which no concrete listener is ever keyed on. Dev builds must call it out.
+            EventBus bus = new EventBus();
+            object owner = new object();
+            int calls = 0;
+            bus.Subscribe<PingSignal>(owner, _ => calls++);
+
+            ISignal signal = new PingSignal();
+            LogAssert.Expect(LogType.Error, new Regex("interface or an abstract type"));
+            bus.Emit(signal);
+
+            Assert.AreEqual(0, calls, "The emit is keyed on the interface type and reaches no concrete listener.");
+        }
+
+        [Test]
+        public void Subscribe_InterfaceTypeArgument_LogsDevError()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+
+            LogAssert.Expect(LogType.Error, new Regex("interface or an abstract type"));
+            bus.Subscribe<ISignal>(owner, _ => { });
+        }
+
         #endregion
 
 
