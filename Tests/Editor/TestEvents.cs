@@ -41,4 +41,30 @@ namespace SideXP.Broadcaster.Tests
         public void OnPing(PingSignal signal) => Count++;
     }
 
+    /// <summary>
+    /// A void command — has a handler that performs an action and acknowledges it, but reports no outcome.
+    /// </summary>
+    internal struct MoveCommand : ICommand
+    {
+        public int Steps;
+    }
+
+    /// <summary>
+    /// A valued command — its handler performs an action and reports the outcome (here, the doubled input). Sibling of
+    /// <see cref="ICommand"/>, never inheriting it, so overload resolution on <c>Order</c> stays unambiguous.
+    /// </summary>
+    internal struct DoubleCommand : ICommand<int>
+    {
+        public int Value;
+    }
+
+    /// <summary>
+    /// A request — its single handler answers with a value derived from the payload (here, the sum) without mutating state.
+    /// </summary>
+    internal struct SumRequest : IRequest<int>
+    {
+        public int A;
+        public int B;
+    }
+
 }

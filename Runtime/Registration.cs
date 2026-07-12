@@ -14,6 +14,12 @@ namespace SideXP.Broadcaster
 
         /// <summary>A state provider, single per type, answering "what is the current value?".</summary>
         Provider,
+
+        /// <summary>A command handler, single per type, that performs the ordered action.</summary>
+        CommandHandler,
+
+        /// <summary>A request handler, single per type, that answers the question.</summary>
+        RequestHandler,
     }
 
     /// <summary>

@@ -47,6 +47,12 @@ namespace SideXP.Broadcaster
         /// </summary>
         private readonly Dictionary<Type, Registration> _providers = new Dictionary<Type, Registration>();
 
+        /// <summary>
+        /// Command and request handlers, at most one per event type. Both kinds share this single-handler store (a type is only ever a
+        /// command <i>or</i> a request, never both), keyed by exact event type.
+        /// </summary>
+        private readonly Dictionary<Type, Registration> _handlers = new Dictionary<Type, Registration>();
+
         #endregion
 
 
@@ -259,6 +265,179 @@ namespace SideXP.Broadcaster
         #endregion
 
 
+        #region Commands
+
+        /// <summary>
+        /// Registers the single handler that performs a command. A command has <b>exactly one</b> handler: a second registration for the
+        /// same type is ignored.
+        /// </summary>
+        /// <typeparam name="T">The exact command type to handle.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="handler">Performs the action when the command is ordered.</param>
+        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists, returns an inactive handle
+        /// instead.</returns>
+        public SubscriptionHandle Obey<T>(object owner, Action<T> handler) where T : ICommand
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            MainThreadGuard.Assert();
+            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, handler);
+        }
+
+        /// <summary>
+        /// Registers the single handler that performs a command and reports its outcome. A command has <b>exactly one</b> handler: a second
+        /// registration for the same type is ignored.
+        /// </summary>
+        /// <typeparam name="T">The exact command type to handle.</typeparam>
+        /// <typeparam name="TResult">The outcome the action produces.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="handler">Performs the action and returns its outcome.</param>
+        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists, returns an inactive handle
+        /// instead.</returns>
+        public SubscriptionHandle Obey<T, TResult>(object owner, Func<T, TResult> handler) where T : ICommand<TResult>
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            MainThreadGuard.Assert();
+            // Store an invoker typed on the interface so the interface-typed Order can call it back without knowing the concrete command
+            // type (the cast unboxes the command the caller passed as ICommand<TResult>).
+            Func<ICommand<TResult>, TResult> invoker = command => handler((T)command);
+            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, invoker);
+        }
+
+        /// <summary>
+        /// Orders a command, invoking its single handler synchronously. Returns whether a handler performed it. With no handler
+        /// registered, logs a dev-build error and returns <c>false</c>.
+        /// </summary>
+        /// <typeparam name="T">The exact command type.</typeparam>
+        /// <param name="command">The command instance (its fields are the payload).</param>
+        /// <returns>True if a handler performed the command.</returns>
+        public bool Order<T>(T command) where T : ICommand
+        {
+            MainThreadGuard.Assert();
+
+            if (_handlers.TryGetValue(typeof(T), out Registration registration) && registration.Active)
+            {
+                ((Action<T>)registration.Callback).Invoke(command);
+                return true;
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.LogError($"[Broadcaster] No handler is registered for command '{typeof(T).Name}'. The command was not performed.");
+#endif
+            return false;
+        }
+
+        /// <summary>
+        /// Orders a command and returns the outcome its handler produced, invoked synchronously. A handler is mandatory: with none
+        /// registered this throws (a valued order has no outcome to report without one).
+        /// </summary>
+        /// <typeparam name="TResult">The outcome the action produces.</typeparam>
+        /// <param name="command">The command instance, typed as its interface so <typeparamref name="TResult"/> is inferred at the call
+        /// site.</param>
+        /// <returns>The outcome the handler produced.</returns>
+        /// <exception cref="InvalidOperationException">No handler is registered for the command type.</exception>
+        public TResult Order<TResult>(ICommand<TResult> command)
+        {
+            if (command == null)
+                throw new ArgumentNullException(nameof(command));
+
+            MainThreadGuard.Assert();
+
+            Type type = command.GetType();
+            if (_handlers.TryGetValue(type, out Registration registration) && registration.Active)
+                return ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command);
+
+            throw new InvalidOperationException($"No handler is registered for command '{type.Name}', which must report a {typeof(TResult).Name}.");
+        }
+
+        #endregion
+
+
+        #region Requests
+
+        /// <summary>
+        /// Registers the single handler that answers a request. A request has <b>exactly one</b> handler: a second registration for the
+        /// same type is ignored.
+        /// </summary>
+        /// <typeparam name="T">The exact request type to answer.</typeparam>
+        /// <typeparam name="TResult">The type of the answer.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="handler">Produces the answer. By convention it must not mutate state (asking is always safe).</param>
+        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists, returns an inactive handle
+        /// instead.</returns>
+        public SubscriptionHandle Answer<T, TResult>(object owner, Func<T, TResult> handler) where T : IRequest<TResult>
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            MainThreadGuard.Assert();
+            // Same interface-typed invoker trick as commands, so the interface-typed Ask can call back without the concrete request type.
+            Func<IRequest<TResult>, TResult> invoker = request => handler((T)request);
+            return RegisterHandler(typeof(T), RegistrationRole.RequestHandler, owner, invoker);
+        }
+
+        /// <summary>
+        /// Asks a request and returns its handler's answer, invoked synchronously. A handler is mandatory: with none registered this
+        /// throws (a question with no answer has no value to return). Use <see cref="TryAsk{TResult}(IRequest{TResult}, out TResult)"/> to
+        /// tolerate an unanswered request.
+        /// </summary>
+        /// <typeparam name="TResult">The type of the answer.</typeparam>
+        /// <param name="request">The request instance, typed as its interface so <typeparamref name="TResult"/> is inferred at the call
+        /// site.</param>
+        /// <returns>The handler's answer.</returns>
+        /// <exception cref="InvalidOperationException">No handler is registered for the request type.</exception>
+        public TResult Ask<TResult>(IRequest<TResult> request)
+        {
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+
+            MainThreadGuard.Assert();
+
+            Type type = request.GetType();
+            if (_handlers.TryGetValue(type, out Registration registration) && registration.Active)
+                return ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+
+            throw new InvalidOperationException($"No handler is registered to answer request '{type.Name}'.");
+        }
+
+        /// <summary>
+        /// Asks a request without requiring an answer. Returns whether a handler answered. <paramref name="result"/> is the answer, or
+        /// <c>default</c> if none.
+        /// </summary>
+        /// <typeparam name="TResult">The type of the answer.</typeparam>
+        /// <param name="request">The request instance.</param>
+        /// <param name="result">The handler's answer, or <c>default</c> if no handler is registered.</param>
+        /// <returns>True if a handler answered.</returns>
+        public bool TryAsk<TResult>(IRequest<TResult> request, out TResult result)
+        {
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+
+            MainThreadGuard.Assert();
+
+            Type type = request.GetType();
+            if (_handlers.TryGetValue(type, out Registration registration) && registration.Active)
+            {
+                result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+                return true;
+            }
+
+            result = default;
+            return false;
+        }
+
+        #endregion
+
+
         #region Cleanup
 
         /// <summary>
@@ -296,6 +475,15 @@ namespace SideXP.Broadcaster
                         removed++;
                     }
                 }
+
+                foreach (Registration handler in _handlers.Values)
+                {
+                    if (handler.Active && ReferenceEquals(handler.Owner, owner))
+                    {
+                        Remove(handler);
+                        removed++;
+                    }
+                }
             }
             finally
             {
@@ -319,9 +507,12 @@ namespace SideXP.Broadcaster
             }
             foreach (Registration provider in _providers.Values)
                 provider.Active = false;
+            foreach (Registration handler in _handlers.Values)
+                handler.Active = false;
 
             _signalRegistrations.Clear();
             _providers.Clear();
+            _handlers.Clear();
             _pendingRemovals.Clear();
         }
 
@@ -346,12 +537,45 @@ namespace SideXP.Broadcaster
                 provider.Active = false;
                 _providers.Remove(type);
             }
+
+            if (_handlers.TryGetValue(type, out Registration handler))
+            {
+                handler.Active = false;
+                _handlers.Remove(type);
+            }
         }
 
         #endregion
 
 
         #region Internal
+
+        /// <summary>
+        /// Stores a command or request handler in the single-handler slot for its type, enforcing the exactly-one rule. If an active
+        /// handler already occupies the slot, logs a dev-build diagnostic and returns an inactive handle (the first stays authoritative).
+        /// </summary>
+        private SubscriptionHandle RegisterHandler(Type type, RegistrationRole role, object owner, Delegate callback)
+        {
+            if (_handlers.TryGetValue(type, out Registration existing) && existing.Active)
+            {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                Debug.LogError($"[Broadcaster] A handler for '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored.", owner as UnityEngine.Object);
+#endif
+                return default;
+            }
+
+            Registration registration = new Registration
+            {
+                Bus = this,
+                Role = role,
+                EventType = type,
+                Owner = owner,
+                Callback = callback,
+                Active = true,
+            };
+            _handlers[type] = registration;
+            return new SubscriptionHandle(registration);
+        }
 
         /// <summary>
         /// Marks a registration inactive and removes it (immediately when no dispatch is in progress), otherwise deferred until the
@@ -381,6 +605,14 @@ namespace SideXP.Broadcaster
                 // it while this one was pending removal.
                 if (_providers.TryGetValue(registration.EventType, out Registration current) && current == registration)
                     _providers.Remove(registration.EventType);
+                return;
+            }
+
+            if (registration.Role == RegistrationRole.CommandHandler || registration.Role == RegistrationRole.RequestHandler)
+            {
+                // Same slot guard as providers: only drop it if this exact handler still occupies it.
+                if (_handlers.TryGetValue(registration.EventType, out Registration current) && current == registration)
+                    _handlers.Remove(registration.EventType);
                 return;
             }
 

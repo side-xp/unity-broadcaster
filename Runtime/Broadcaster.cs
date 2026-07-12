@@ -22,7 +22,7 @@ namespace SideXP.Broadcaster
         #endregion
 
 
-        #region Public API
+        #region Signals
 
         /// <inheritdoc cref="EventBus.Emit{T}(T)"/>
         public static void Emit<T>(T signal) where T : ISignal
@@ -53,6 +53,63 @@ namespace SideXP.Broadcaster
         {
             return Default.TryGetCurrent(out current);
         }
+
+        #endregion
+
+
+        #region Commands
+
+        /// <inheritdoc cref="EventBus.Obey{T}(object, Action{T})"/>
+        public static SubscriptionHandle Obey<T>(object owner, Action<T> handler) where T : ICommand
+        {
+            return Default.Obey(owner, handler);
+        }
+
+        /// <inheritdoc cref="EventBus.Obey{T, TResult}(object, Func{T, TResult})"/>
+        public static SubscriptionHandle Obey<T, TResult>(object owner, Func<T, TResult> handler) where T : ICommand<TResult>
+        {
+            return Default.Obey(owner, handler);
+        }
+
+        /// <inheritdoc cref="EventBus.Order{T}(T)"/>
+        public static bool Order<T>(T command) where T : ICommand
+        {
+            return Default.Order(command);
+        }
+
+        /// <inheritdoc cref="EventBus.Order{TResult}(ICommand{TResult})"/>
+        public static TResult Order<TResult>(ICommand<TResult> command)
+        {
+            return Default.Order(command);
+        }
+
+        #endregion
+
+
+        #region Requests
+
+        /// <inheritdoc cref="EventBus.Answer{T, TResult}(object, Func{T, TResult})"/>
+        public static SubscriptionHandle Answer<T, TResult>(object owner, Func<T, TResult> handler) where T : IRequest<TResult>
+        {
+            return Default.Answer(owner, handler);
+        }
+
+        /// <inheritdoc cref="EventBus.Ask{TResult}(IRequest{TResult})"/>
+        public static TResult Ask<TResult>(IRequest<TResult> request)
+        {
+            return Default.Ask(request);
+        }
+
+        /// <inheritdoc cref="EventBus.TryAsk{TResult}(IRequest{TResult}, out TResult)"/>
+        public static bool TryAsk<TResult>(IRequest<TResult> request, out TResult result)
+        {
+            return Default.TryAsk(request, out result);
+        }
+
+        #endregion
+
+
+        #region General
 
         /// <inheritdoc cref="EventBus.UnsubscribeAll(object)"/>
         public static int UnsubscribeAll(object owner)
