@@ -699,7 +699,7 @@ namespace SideXP.Broadcaster
         /// cue never completes for this performer (until the performer is unregistered).</param>
         /// <returns>A handle that unregisters this performer when disposed.</returns>
         /// <inheritdoc cref="Perform{T}(object, Action{T})"/>
-        public SubscriptionHandle Perform<T>(object owner, Action<T, Action> performer) where T : ICue
+        public SubscriptionHandle Perform<T>(object owner, CuePerformerDelegate<T> performer) where T : ICue
         {
             if (owner == null)
                 throw new ArgumentNullException(nameof(owner));
@@ -1065,7 +1065,7 @@ namespace SideXP.Broadcaster
                     break;
 
                 // Callback-style: runs synchronously and is handed a `done` callback that resolves this performer when invoked.
-                case Action<T, Action> callback:
+                case CuePerformerDelegate<T> callback:
                     try
                     {
                         callback.Invoke(cue, resolve);

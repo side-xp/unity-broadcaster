@@ -72,8 +72,8 @@ namespace SideXP.Broadcaster
             return Default.Perform(owner, performer);
         }
 
-        /// <inheritdoc cref="EventBus.Perform{T}(object, Action{T, Action})"/>
-        public static SubscriptionHandle Perform<T>(object owner, Action<T, Action> performer) where T : ICue
+        /// <inheritdoc cref="EventBus.Perform{T}(object, CuePerformerDelegate{T})"/>
+        public static SubscriptionHandle Perform<T>(object owner, CuePerformerDelegate<T> performer) where T : ICue
         {
             return Default.Perform(owner, performer);
         }
