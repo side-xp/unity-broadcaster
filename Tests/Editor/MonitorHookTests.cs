@@ -36,6 +36,7 @@ namespace SideXP.Broadcaster.Tests
             public readonly List<ListenerSpan> ListenersEnded = new List<ListenerSpan>();
             public readonly List<RegistrationInfo> Registered = new List<RegistrationInfo>();
             public readonly List<RegistrationInfo> Unregistered = new List<RegistrationInfo>();
+            public readonly List<Violation> Violations = new List<Violation>();
 
             public Recorder(EventBus bus)
             {
@@ -45,6 +46,7 @@ namespace SideXP.Broadcaster.Tests
                 bus.OnListenerEnded += listener => { Sequence.Add("listener-"); ListenersEnded.Add(listener); };
                 bus.OnRegistered += info => Registered.Add(info);
                 bus.OnUnregistered += info => Unregistered.Add(info);
+                bus.OnViolation += violation => Violations.Add(violation);
             }
         }
 
@@ -787,6 +789,254 @@ namespace SideXP.Broadcaster.Tests
             Assert.AreEqual(DispatchOutcome.Completed, span.Outcome);
             Assert.AreEqual(RegistrationRole.RequestHandler, span.Listeners[0].Role);
             Assert.AreEqual(DispatchOutcome.Completed, span.Listeners[0].Outcome);
+        }
+
+        #endregion
+
+
+        #region Violations
+
+        [Test]
+        public void Order_NoHandler_ReportsUnhandledCommand()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Error, new Regex("No handler is registered for command"));
+            bus.Order(new MoveCommand());
+
+            Assert.AreEqual(1, recorder.Violations.Count);
+            Violation violation = recorder.Violations[0];
+            Assert.AreEqual(ViolationKind.UnhandledCommand, violation.Kind);
+            Assert.AreEqual(typeof(MoveCommand), violation.EventType);
+            Assert.IsNotNull(violation.Span, "A dispatch-time violation links to its dispatch.");
+            Assert.AreEqual(EventKind.Command, violation.Span.Kind);
+        }
+
+        [Test]
+        public void Ask_NoHandler_ReportsUnansweredRequest()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            Assert.Throws<InvalidOperationException>(() => bus.Ask(new SumRequest()));
+
+            Assert.AreEqual(1, recorder.Violations.Count);
+            Assert.AreEqual(ViolationKind.UnansweredRequest, recorder.Violations[0].Kind);
+            Assert.AreEqual(typeof(SumRequest), recorder.Violations[0].EventType);
+        }
+
+        [Test]
+        public void OrderAsync_NoHandler_ReportsUnhandledCommand()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Error, new Regex("No handler is registered for command"));
+            bus.OrderAsync(new MoveCommand()).GetAwaiter().GetResult();
+
+            Assert.AreEqual(1, recorder.Violations.Count);
+            Assert.AreEqual(ViolationKind.UnhandledCommand, recorder.Violations[0].Kind);
+        }
+
+        [Test]
+        public void Order_AsyncHandlerThroughSyncVerb_ReportsSyncCallOnAsyncHandler()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Obey<MoveCommand>(owner, _ => new AwaitableCompletionSource().Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Error, new Regex("asynchronous"));
+            bus.Order(new MoveCommand());
+
+            Assert.AreEqual(1, recorder.Violations.Count);
+            Assert.AreEqual(ViolationKind.SyncCallOnAsyncHandler, recorder.Violations[0].Kind);
+        }
+
+        [Test]
+        public void Provide_Duplicate_ReportsMultipleProviders()
+        {
+            EventBus bus = new EventBus();
+            object first = new object();
+            object second = new object();
+            bus.Provide<PingSignal>(first, () => new PingSignal());
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Error, new Regex("already registered"));
+            bus.Provide<PingSignal>(second, () => new PingSignal());
+
+            Assert.AreEqual(1, recorder.Violations.Count);
+            Violation violation = recorder.Violations[0];
+            Assert.AreEqual(ViolationKind.MultipleProviders, violation.Kind);
+            Assert.AreSame(second, violation.Owner, "The rejected registration's owner is reported.");
+            Assert.IsNull(violation.Span, "A registration-time violation has no dispatch span.");
+        }
+
+        [Test]
+        public void Obey_Duplicate_ReportsMultipleHandlers()
+        {
+            EventBus bus = new EventBus();
+            object first = new object();
+            object second = new object();
+            bus.Obey<MoveCommand>(first, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Error, new Regex("already registered"));
+            bus.Obey<MoveCommand>(second, _ => { });
+
+            Assert.AreEqual(1, recorder.Violations.Count);
+            Assert.AreEqual(ViolationKind.MultipleHandlers, recorder.Violations[0].Kind);
+            Assert.AreSame(second, recorder.Violations[0].Owner);
+        }
+
+        [Test]
+        public void TryAsk_NoHandler_ReportsNoViolation()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            bus.TryAsk(new SumRequest(), out int _);
+
+            Assert.AreEqual(0, recorder.Violations.Count, "A tolerant miss is not a violation.");
+        }
+
+        #endregion
+
+
+        #region Hook re-entrancy & robustness
+
+        [Test]
+        public void ThrowingConsumer_IsIsolated_DispatchStillCompletes()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bool listenerRan = false;
+            bool spanEnded = false;
+            bus.Subscribe<PingSignal>(owner, _ => listenerRan = true);
+            bus.OnListenerBegan += _ => throw new InvalidOperationException("consumer boom");
+            bus.OnSpanEnded += _ => spanEnded = true;
+
+            LogAssert.Expect(LogType.Exception, new Regex("consumer boom"));
+            Assert.DoesNotThrow(() => bus.Emit(new PingSignal()));
+
+            Assert.IsTrue(listenerRan, "The listener still ran despite the throwing hook consumer.");
+            Assert.IsTrue(spanEnded, "The span still ended.");
+        }
+
+        [Test]
+        public void ThrowingConsumer_OtherConsumersStillNotified()
+        {
+            EventBus bus = new EventBus();
+            bool secondRan = false;
+            bus.OnSpanBegan += _ => throw new InvalidOperationException("first boom");
+            bus.OnSpanBegan += _ => secondRan = true;
+
+            LogAssert.Expect(LogType.Exception, new Regex("first boom"));
+            bus.Emit(new PingSignal());
+
+            Assert.IsTrue(secondRan, "A throwing consumer never stops the next one.");
+        }
+
+        [Test]
+        public void ReentrantEmitFromSpanBegan_DoesNotCorruptAndParentsCorrectly()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bool pingRan = false;
+            bool pongRan = false;
+            bus.Subscribe<PingSignal>(owner, _ => pingRan = true);
+            bus.Subscribe<PongSignal>(owner, _ => pongRan = true);
+
+            List<DispatchSpan> spans = new List<DispatchSpan>();
+            bus.OnSpanBegan += span =>
+            {
+                spans.Add(span);
+                // Re-enter the bus from inside a hook, guarded against infinite recursion.
+                if (span.EventType == typeof(PingSignal))
+                    bus.Emit(new PongSignal());
+            };
+
+            Assert.DoesNotThrow(() => bus.Emit(new PingSignal()));
+
+            Assert.IsTrue(pingRan);
+            Assert.IsTrue(pongRan, "The re-entrant emit ran.");
+            Assert.AreEqual(typeof(PingSignal), spans[0].EventType);
+            Assert.AreEqual(typeof(PongSignal), spans[1].EventType);
+            Assert.AreSame(spans[0], spans[1].Parent, "The re-entrant emit is parented to the dispatch whose hook triggered it.");
+        }
+
+        [Test]
+        public void ReentrantUnsubscribeAllFromListenerBegan_DoesNotCorrupt()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            int runs = 0;
+            bus.Subscribe<PingSignal>(owner, _ => runs++);
+            bus.Subscribe<PingSignal>(owner, _ => runs++);
+            bool unsubscribed = false;
+            bus.OnListenerBegan += _ =>
+            {
+                if (!unsubscribed)
+                {
+                    unsubscribed = true;
+                    bus.UnsubscribeAll(owner);
+                }
+            };
+
+            Assert.DoesNotThrow(() => bus.Emit(new PingSignal()));
+            Assert.AreEqual(1, runs, "The first listener ran; the second was removed mid-dispatch and skipped.");
+
+            runs = 0;
+            bus.Emit(new PingSignal());
+            Assert.AreEqual(0, runs, "Both listeners are gone after the re-entrant removal.");
+        }
+
+        [Test]
+        public void ReentrantClearFromListenerEnded_DoesNotCorrupt()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Subscribe<PingSignal>(owner, _ => { });
+            bus.Subscribe<PingSignal>(owner, _ => { });
+            bool cleared = false;
+            bus.OnListenerEnded += _ =>
+            {
+                if (!cleared)
+                {
+                    cleared = true;
+                    bus.Clear();
+                }
+            };
+
+            Assert.DoesNotThrow(() => bus.Emit(new PingSignal()));
+
+            // The bus is usable after a re-entrant clear.
+            int runs = 0;
+            bus.Subscribe<PingSignal>(new object(), _ => runs++);
+            bus.Emit(new PingSignal());
+            Assert.AreEqual(1, runs);
+        }
+
+        [Test]
+        public void ReentrantRegisterFromListenerBegan_NotInvokedByCurrentDispatch()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            int runs = 0;
+            bus.Subscribe<PingSignal>(owner, _ => runs++);
+            bool added = false;
+            bus.OnListenerBegan += _ =>
+            {
+                if (!added)
+                {
+                    added = true;
+                    bus.Subscribe<PingSignal>(new object(), _ => runs++);
+                }
+            };
+
+            bus.Emit(new PingSignal());
+            Assert.AreEqual(1, runs, "A listener registered from inside a hook is not invoked by the dispatch that raised the hook.");
         }
 
         #endregion

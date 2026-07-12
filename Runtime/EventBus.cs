@@ -276,6 +276,9 @@ namespace SideXP.Broadcaster
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.LogError($"[Broadcaster] A provider for '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
 #endif
+#if BROADCASTER_MONITOR
+                    MonitorViolation(ViolationKind.MultipleProviders, type, owner);
+#endif
                     return default;
                 }
 
@@ -443,6 +446,7 @@ namespace SideXP.Broadcaster
                     Debug.LogError($"[Broadcaster] The handler for command '{typeof(T).Name}' is asynchronous and can't be run synchronously. Use OrderAsync.");
 #endif
 #if BROADCASTER_MONITOR
+                    MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, typeof(T), span);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
                     return false;
@@ -460,6 +464,7 @@ namespace SideXP.Broadcaster
             Debug.LogError($"[Broadcaster] No handler is registered for command '{typeof(T).Name}'. The command was not performed.");
 #endif
 #if BROADCASTER_MONITOR
+            MonitorDispatchViolation(ViolationKind.UnhandledCommand, typeof(T), span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
             return false;
@@ -491,6 +496,7 @@ namespace SideXP.Broadcaster
                 if (registration.Async)
                 {
 #if BROADCASTER_MONITOR
+                    MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, type, span);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
                     throw new InvalidOperationException($"The handler for command '{type.Name}' is asynchronous and can't be run synchronously. Use OrderAsync.");
@@ -504,6 +510,7 @@ namespace SideXP.Broadcaster
             }
 
 #if BROADCASTER_MONITOR
+            MonitorDispatchViolation(ViolationKind.UnhandledCommand, type, span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
             throw new InvalidOperationException($"No handler is registered for command '{type.Name}', which must report a {typeof(TResult).Name}.");
@@ -576,6 +583,7 @@ namespace SideXP.Broadcaster
             Debug.LogError($"[Broadcaster] No handler is registered for command '{typeof(T).Name}'. The command was not performed.");
 #endif
 #if BROADCASTER_MONITOR
+            MonitorDispatchViolation(ViolationKind.UnhandledCommand, typeof(T), span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
             return CompletedAwaitable();
@@ -645,6 +653,7 @@ namespace SideXP.Broadcaster
             }
 
 #if BROADCASTER_MONITOR
+            MonitorDispatchViolation(ViolationKind.UnhandledCommand, type, span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
             return FaultedAwaitable<TResult>(new InvalidOperationException($"No handler is registered for command '{type.Name}', which must report a {typeof(TResult).Name}."));
@@ -729,6 +738,7 @@ namespace SideXP.Broadcaster
                 if (registration.Async)
                 {
 #if BROADCASTER_MONITOR
+                    MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, type, span);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
                     throw new InvalidOperationException($"The handler for request '{type.Name}' is asynchronous and can't be run synchronously. Use AskAsync.");
@@ -742,6 +752,7 @@ namespace SideXP.Broadcaster
             }
 
 #if BROADCASTER_MONITOR
+            MonitorDispatchViolation(ViolationKind.UnansweredRequest, type, span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
             throw new InvalidOperationException($"No handler is registered to answer request '{type.Name}'.");
@@ -775,6 +786,7 @@ namespace SideXP.Broadcaster
                     Debug.LogError($"[Broadcaster] The handler for request '{type.Name}' is asynchronous and can't be answered synchronously. Use AskAsync.");
 #endif
 #if BROADCASTER_MONITOR
+                    MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, type, span);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
                     result = default;
@@ -861,6 +873,7 @@ namespace SideXP.Broadcaster
             }
 
 #if BROADCASTER_MONITOR
+            MonitorDispatchViolation(ViolationKind.UnansweredRequest, type, span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
             return FaultedAwaitable<TResult>(new InvalidOperationException($"No handler is registered to answer request '{type.Name}'."));
@@ -1254,6 +1267,9 @@ namespace SideXP.Broadcaster
                 {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.LogError($"[Broadcaster] A handler for {(isRequest ? "request" : "command")} '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
+#endif
+#if BROADCASTER_MONITOR
+                    MonitorViolation(ViolationKind.MultipleHandlers, type, owner);
 #endif
                     return default;
                 }

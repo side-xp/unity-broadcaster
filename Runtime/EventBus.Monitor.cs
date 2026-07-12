@@ -48,6 +48,12 @@ namespace SideXP.Broadcaster
         /// </summary>
         public event Action<ListenerSpan> OnListenerEnded;
 
+        /// <summary>
+        /// Raised when the bus is misused in a way it also logs or throws (an unhandled order, an unanswered ask, a duplicate handler or
+        /// provider, a synchronous call on an async handler). Editor and development builds only.
+        /// </summary>
+        public event Action<Violation> OnViolation;
+
         #endregion
 
 
@@ -106,7 +112,7 @@ namespace SideXP.Broadcaster
         {
             DispatchSpan span = new DispatchSpan(_nextSpanId++, kind, eventType, snapshot, _currentSpan, Time.frameCount, Time.realtimeSinceStartupAsDouble);
             _currentSpan = span;
-            OnSpanBegan?.Invoke(span);
+            Raise(OnSpanBegan, span);
             return span;
         }
 
@@ -168,7 +174,7 @@ namespace SideXP.Broadcaster
             span.EndTime = Time.realtimeSinceStartupAsDouble;
             span.Outcome = outcome;
             span.IsComplete = true;
-            OnSpanEnded?.Invoke(span);
+            Raise(OnSpanEnded, span);
         }
 
         /// <summary>
@@ -182,7 +188,7 @@ namespace SideXP.Broadcaster
 
             ListenerSpan listener = new ListenerSpan(span, registration.Owner, RoleOf(registration), Time.frameCount, Time.realtimeSinceStartupAsDouble);
             span.Add(listener);
-            OnListenerBegan?.Invoke(listener);
+            Raise(OnListenerBegan, listener);
             return listener;
         }
 
@@ -199,7 +205,7 @@ namespace SideXP.Broadcaster
             listener.Outcome = outcome;
             listener.Exception = exception;
             listener.IsComplete = true;
-            OnListenerEnded?.Invoke(listener);
+            Raise(OnListenerEnded, listener);
         }
 
         /// <summary>
@@ -258,7 +264,7 @@ namespace SideXP.Broadcaster
             if (OnRegistered == null)
                 return;
 
-            OnRegistered.Invoke(new RegistrationInfo(KindOf(registration), RoleOf(registration), registration.EventType, registration.Owner, Time.frameCount, RegistrationChangeReason.Registered));
+            Raise(OnRegistered, new RegistrationInfo(KindOf(registration), RoleOf(registration), registration.EventType, registration.Owner, Time.frameCount, RegistrationChangeReason.Registered));
         }
 
         /// <summary>
@@ -269,7 +275,57 @@ namespace SideXP.Broadcaster
             if (OnUnregistered == null)
                 return;
 
-            OnUnregistered.Invoke(new RegistrationInfo(KindOf(registration), RoleOf(registration), registration.EventType, registration.Owner, Time.frameCount, reason));
+            Raise(OnUnregistered, new RegistrationInfo(KindOf(registration), RoleOf(registration), registration.EventType, registration.Owner, Time.frameCount, reason));
+        }
+
+        #endregion
+
+
+        #region Violations
+
+        /// <summary>
+        /// Reports a registration-time violation (a duplicate handler or provider), carrying the owner of the rejected registration.
+        /// </summary>
+        private void MonitorViolation(ViolationKind kind, Type eventType, object owner)
+        {
+            if (OnViolation == null)
+                return;
+
+            Raise(OnViolation, new Violation(kind, eventType, owner, BuildViolationMessage(kind, eventType), Time.frameCount, null));
+        }
+
+        /// <summary>
+        /// Reports a dispatch-time violation (an unhandled order, an unanswered ask, a sync call on an async handler), linked to the
+        /// dispatch it happened in (which is <c>null</c> when no dispatch-span hook is attached).
+        /// </summary>
+        private void MonitorDispatchViolation(ViolationKind kind, Type eventType, DispatchSpan span)
+        {
+            if (OnViolation == null)
+                return;
+
+            Raise(OnViolation, new Violation(kind, eventType, null, BuildViolationMessage(kind, eventType), Time.frameCount, span));
+        }
+
+        /// <summary>
+        /// A human-readable summary for a violation.
+        /// </summary>
+        private static string BuildViolationMessage(ViolationKind kind, Type eventType)
+        {
+            switch (kind)
+            {
+                case ViolationKind.UnhandledCommand:
+                    return $"No handler is registered for command '{eventType.Name}'.";
+                case ViolationKind.UnansweredRequest:
+                    return $"No handler is registered to answer request '{eventType.Name}'.";
+                case ViolationKind.MultipleHandlers:
+                    return $"A second handler for '{eventType.Name}' was ignored; the first stays authoritative.";
+                case ViolationKind.MultipleProviders:
+                    return $"A second provider for '{eventType.Name}' was ignored; the first stays authoritative.";
+                case ViolationKind.SyncCallOnAsyncHandler:
+                    return $"The handler for '{eventType.Name}' is asynchronous and can't be run through a synchronous verb.";
+                default:
+                    return eventType.Name;
+            }
         }
 
         #endregion
@@ -309,6 +365,29 @@ namespace SideXP.Broadcaster
                     return handler.IsRequest ? EventKind.Request : EventKind.Command;
                 default:
                     return EventKind.Signal;
+            }
+        }
+
+        /// <summary>
+        /// Raises a hook, isolating each subscriber: a hook consumer is user code running inside bus internals, so one that throws is
+        /// logged and never stops the other consumers, the dispatch that raised it, or the hook stream. A consumer may freely re-enter the
+        /// bus — the dispatch loops and bulk-removal paths already tolerate registrations changing mid-flight.
+        /// </summary>
+        private static void Raise<T>(Action<T> hook, T argument)
+        {
+            if (hook == null)
+                return;
+
+            foreach (Delegate subscriber in hook.GetInvocationList())
+            {
+                try
+                {
+                    ((Action<T>)subscriber).Invoke(argument);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception);
+                }
             }
         }
 
