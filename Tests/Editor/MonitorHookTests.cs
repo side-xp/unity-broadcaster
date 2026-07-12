@@ -472,6 +472,325 @@ namespace SideXP.Broadcaster.Tests
 
         #endregion
 
+
+        #region Handled spans (sync)
+
+        [Test]
+        public void Order_VoidHandler_SpanWithHandlerSubSpan()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Obey<MoveCommand>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bool handled = bus.Order(new MoveCommand { Steps = 3 });
+
+            Assert.IsTrue(handled);
+            CollectionAssert.AreEqual(new[] { "span+", "listener+", "listener-", "span-" }, recorder.Sequence);
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(EventKind.Command, span.Kind);
+            Assert.AreEqual(typeof(MoveCommand), span.EventType);
+            Assert.AreEqual("3", ValueOf(span.Payload, nameof(MoveCommand.Steps)));
+            Assert.AreEqual(DispatchOutcome.Completed, span.Outcome);
+            Assert.AreEqual(RegistrationRole.CommandHandler, span.Listeners[0].Role);
+            Assert.AreEqual(DispatchOutcome.Completed, span.Listeners[0].Outcome);
+        }
+
+        [Test]
+        public void Order_VoidNoHandler_FaultedSpanNoSubSpan()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Error, new Regex("No handler is registered for command"));
+            bool handled = bus.Order(new MoveCommand());
+
+            Assert.IsFalse(handled);
+            CollectionAssert.AreEqual(new[] { "span+", "span-" }, recorder.Sequence);
+            Assert.AreEqual(DispatchOutcome.Faulted, recorder.SpansBegan[0].Outcome);
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count);
+        }
+
+        [Test]
+        public void Order_VoidHandlerThrows_FaultedSubSpanAndSpanPropagates()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            // Typed local so the throw-expression lambda binds to the void handler overload, not the async one.
+            Action<MoveCommand> throwing = _ => throw new InvalidOperationException("boom");
+            bus.Obey<MoveCommand>(owner, throwing);
+            Recorder recorder = new Recorder(bus);
+
+            Assert.Throws<InvalidOperationException>(() => bus.Order(new MoveCommand()));
+
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(DispatchOutcome.Faulted, span.Listeners[0].Outcome);
+            Assert.AreEqual("boom", span.Listeners[0].Exception.Message);
+            Assert.AreEqual(DispatchOutcome.Faulted, span.Outcome);
+        }
+
+        [Test]
+        public void Order_VoidAsyncHandlerThroughSyncVerb_FaultedSpan()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Obey<MoveCommand>(owner, _ => new AwaitableCompletionSource().Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Error, new Regex("asynchronous"));
+            bool handled = bus.Order(new MoveCommand());
+
+            Assert.IsFalse(handled);
+            Assert.AreEqual(DispatchOutcome.Faulted, recorder.SpansBegan[0].Outcome);
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count, "The async handler is never invoked by the sync verb.");
+        }
+
+        [Test]
+        public void Order_ValuedHandler_SpanCompletedWithResult()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Obey<DoubleCommand, int>(owner, command => command.Value * 2);
+            Recorder recorder = new Recorder(bus);
+
+            int result = bus.Order(new DoubleCommand { Value = 21 });
+
+            Assert.AreEqual(42, result);
+            CollectionAssert.AreEqual(new[] { "span+", "listener+", "listener-", "span-" }, recorder.Sequence);
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(typeof(DoubleCommand), span.EventType, "The span is keyed on the runtime command type, not the interface.");
+            Assert.AreEqual("21", ValueOf(span.Payload, nameof(DoubleCommand.Value)), "The snapshot reflects the concrete command, not the empty interface.");
+            Assert.AreEqual(DispatchOutcome.Completed, span.Outcome);
+        }
+
+        [Test]
+        public void Order_ValuedNoHandler_FaultedSpanThenThrows()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            Assert.Throws<InvalidOperationException>(() => bus.Order(new DoubleCommand()));
+
+            Assert.AreEqual(DispatchOutcome.Faulted, recorder.SpansBegan[0].Outcome);
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count);
+        }
+
+        [Test]
+        public void Ask_Handler_SpanCompletedWithAnswer()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Answer<SumRequest, int>(owner, request => request.A + request.B);
+            Recorder recorder = new Recorder(bus);
+
+            int answer = bus.Ask(new SumRequest { A = 2, B = 3 });
+
+            Assert.AreEqual(5, answer);
+            CollectionAssert.AreEqual(new[] { "span+", "listener+", "listener-", "span-" }, recorder.Sequence);
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(EventKind.Request, span.Kind);
+            Assert.AreEqual(typeof(SumRequest), span.EventType);
+            Assert.AreEqual(RegistrationRole.RequestHandler, span.Listeners[0].Role);
+            Assert.AreEqual(DispatchOutcome.Completed, span.Outcome);
+        }
+
+        [Test]
+        public void Ask_NoHandler_FaultedSpanThenThrows()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            Assert.Throws<InvalidOperationException>(() => bus.Ask(new SumRequest()));
+
+            Assert.AreEqual(DispatchOutcome.Faulted, recorder.SpansBegan[0].Outcome);
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count);
+        }
+
+        [Test]
+        public void TryAsk_NoHandler_CompletedSpanNoSubSpan()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            bool answered = bus.TryAsk(new SumRequest(), out int _);
+
+            Assert.IsFalse(answered);
+            CollectionAssert.AreEqual(new[] { "span+", "span-" }, recorder.Sequence);
+            Assert.AreEqual(DispatchOutcome.Completed, recorder.SpansBegan[0].Outcome, "A tolerant miss is not a fault.");
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count);
+        }
+
+        [Test]
+        public void TryAsk_Handler_CompletedSpanWithSubSpan()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Answer<SumRequest, int>(owner, request => request.A + request.B);
+            Recorder recorder = new Recorder(bus);
+
+            bool answered = bus.TryAsk(new SumRequest { A = 4, B = 6 }, out int result);
+
+            Assert.IsTrue(answered);
+            Assert.AreEqual(10, result);
+            Assert.AreEqual(DispatchOutcome.Completed, recorder.SpansBegan[0].Outcome);
+            Assert.AreEqual(RegistrationRole.RequestHandler, recorder.SpansBegan[0].Listeners[0].Role);
+        }
+
+        #endregion
+
+
+        #region Handled spans (async)
+
+        [Test]
+        public void OrderAsync_AsyncHandler_BlockClosesWhenResolved()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource handler = new AwaitableCompletionSource();
+            bus.Obey<MoveCommand>(owner, _ => handler.Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            Awaitable.Awaiter awaiter = bus.OrderAsync(new MoveCommand { Steps = 2 }).GetAwaiter();
+
+            // The block is open: the span and its sub-span began but haven't closed.
+            CollectionAssert.AreEqual(new[] { "span+", "listener+" }, recorder.Sequence);
+            Assert.IsFalse(recorder.SpansBegan[0].IsComplete);
+            Assert.AreEqual("2", ValueOf(recorder.SpansBegan[0].Payload, nameof(MoveCommand.Steps)));
+
+            handler.SetResult();
+            awaiter.GetResult();
+
+            CollectionAssert.AreEqual(new[] { "span+", "listener+", "listener-", "span-" }, recorder.Sequence);
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(EventKind.Command, span.Kind);
+            Assert.AreEqual(DispatchOutcome.Completed, span.Outcome);
+            Assert.AreEqual(DispatchOutcome.Completed, span.Listeners[0].Outcome);
+        }
+
+        [Test]
+        public void OrderAsync_AsyncHandlerFaults_FaultedBlock()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource handler = new AwaitableCompletionSource();
+            bus.Obey<MoveCommand>(owner, _ => handler.Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            Awaitable.Awaiter awaiter = bus.OrderAsync(new MoveCommand()).GetAwaiter();
+            handler.SetException(new InvalidOperationException("boom"));
+
+            Assert.Catch(() => awaiter.GetResult());
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(DispatchOutcome.Faulted, span.Listeners[0].Outcome);
+            Assert.AreEqual("boom", span.Listeners[0].Exception.Message);
+            Assert.AreEqual(DispatchOutcome.Faulted, span.Outcome);
+        }
+
+        [Test]
+        public void OrderAsync_CancelledDuringFlight_CancelledBlock()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource never = new AwaitableCompletionSource();
+            bus.Obey<MoveCommand>(owner, _ => never.Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            CancellationTokenSource cts = new CancellationTokenSource();
+            Awaitable.Awaiter awaiter = bus.OrderAsync(new MoveCommand(), cts.Token).GetAwaiter();
+            cts.Cancel();
+
+            Assert.Catch<OperationCanceledException>(() => awaiter.GetResult());
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(DispatchOutcome.Cancelled, span.Outcome);
+            Assert.AreEqual(DispatchOutcome.Cancelled, span.Listeners[0].Outcome);
+        }
+
+        [Test]
+        public void OrderAsync_HandlerUnregisteredMidFlight_CancelledBlock()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource never = new AwaitableCompletionSource();
+            SubscriptionHandle handle = bus.Obey<MoveCommand>(owner, _ => never.Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            Awaitable.Awaiter awaiter = bus.OrderAsync(new MoveCommand()).GetAwaiter();
+            handle.Dispose();
+
+            Assert.Catch<OperationCanceledException>(() => awaiter.GetResult());
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(DispatchOutcome.Cancelled, span.Outcome, "Unregistering the handler mid-flight resolves the block as cancelled.");
+            Assert.AreEqual(DispatchOutcome.Cancelled, span.Listeners[0].Outcome);
+        }
+
+        [Test]
+        public void OrderAsync_SyncHandlerThroughAsyncVerb_CompletesSynchronously()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Obey<MoveCommand>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            Awaitable.Awaiter awaiter = bus.OrderAsync(new MoveCommand()).GetAwaiter();
+
+            Assert.IsTrue(awaiter.IsCompleted);
+            CollectionAssert.AreEqual(new[] { "span+", "listener+", "listener-", "span-" }, recorder.Sequence);
+            Assert.AreEqual(DispatchOutcome.Completed, recorder.SpansBegan[0].Outcome);
+        }
+
+        [Test]
+        public void OrderAsync_NoHandler_FaultedSpan()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Error, new Regex("No handler is registered for command"));
+            bus.OrderAsync(new MoveCommand()).GetAwaiter().GetResult();
+
+            CollectionAssert.AreEqual(new[] { "span+", "span-" }, recorder.Sequence);
+            Assert.AreEqual(DispatchOutcome.Faulted, recorder.SpansBegan[0].Outcome);
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count);
+        }
+
+        [Test]
+        public void OrderAsync_AlreadyCancelled_CancelledSpan()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Obey<MoveCommand>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bus.OrderAsync(new MoveCommand(), new CancellationToken(canceled: true));
+
+            CollectionAssert.AreEqual(new[] { "span+", "span-" }, recorder.Sequence);
+            Assert.AreEqual(DispatchOutcome.Cancelled, recorder.SpansBegan[0].Outcome);
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count, "An already-cancelled order never invokes its handler.");
+        }
+
+        [Test]
+        public void AskAsync_AsyncHandler_BlockCarriesAnswer()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource<int> handler = new AwaitableCompletionSource<int>();
+            bus.Answer<SumRequest, int>(owner, _ => handler.Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            Awaitable<int>.Awaiter awaiter = bus.AskAsync(new SumRequest { A = 1, B = 2 }).GetAwaiter();
+            Assert.IsFalse(awaiter.IsCompleted);
+
+            handler.SetResult(3);
+            Assert.AreEqual(3, awaiter.GetResult());
+
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(EventKind.Request, span.Kind);
+            Assert.AreEqual(DispatchOutcome.Completed, span.Outcome);
+            Assert.AreEqual(RegistrationRole.RequestHandler, span.Listeners[0].Role);
+            Assert.AreEqual(DispatchOutcome.Completed, span.Listeners[0].Outcome);
+        }
+
+        #endregion
+
     }
 
 }

@@ -64,26 +64,40 @@ namespace SideXP.Broadcaster
         /// <returns>An immutable snapshot; never <c>null</c>.</returns>
         public static PayloadSnapshot Capture<T>(T payload)
         {
-            if (Plan<T>.Omit)
-                return new PayloadSnapshot(Plan<T>.TypeName, null, Array.Empty<PayloadField>());
+            // Members are read off the static type T, matching the bus's exact-type dispatch. Boxing (for a struct) happens implicitly
+            // when the payload is passed on as object, and only in monitor builds.
+            return CaptureWith(GetPlan(typeof(T)), payload);
+        }
 
-            // Box once so the cached FieldInfo/PropertyInfo can read a struct payload; happens only in monitor builds.
-            object boxed = payload;
+        /// <summary>
+        /// Captures a snapshot of a payload whose static type isn't known at the call site (a command or request handed to the bus as its
+        /// interface): members are read off the <b>runtime</b> type. <paramref name="payload"/> must not be <c>null</c>.
+        /// </summary>
+        public static PayloadSnapshot CaptureBoxed(object payload)
+        {
+            return CaptureWith(GetPlan(payload.GetType()), payload);
+        }
 
-            string summary = Plan<T>.HasCustomToString ? Truncate(SafeToString(boxed)) : null;
+        /// <summary>
+        /// Builds a snapshot from a resolved per-type plan and the (boxed) payload instance.
+        /// </summary>
+        private static PayloadSnapshot CaptureWith(TypePlan plan, object boxed)
+        {
+            if (plan.Omit)
+                return new PayloadSnapshot(plan.TypeName, null, Array.Empty<PayloadField>());
 
-            FieldInfo[] fields = Plan<T>.Fields;
-            PropertyInfo[] properties = Plan<T>.Properties;
-            if (fields.Length == 0 && properties.Length == 0)
-                return new PayloadSnapshot(Plan<T>.TypeName, summary, Array.Empty<PayloadField>());
+            string summary = plan.HasCustomToString ? Truncate(SafeToString(boxed)) : null;
 
-            List<PayloadField> captured = new List<PayloadField>(fields.Length + properties.Length);
-            foreach (FieldInfo field in fields)
+            if (plan.Fields.Length == 0 && plan.Properties.Length == 0)
+                return new PayloadSnapshot(plan.TypeName, summary, Array.Empty<PayloadField>());
+
+            List<PayloadField> captured = new List<PayloadField>(plan.Fields.Length + plan.Properties.Length);
+            foreach (FieldInfo field in plan.Fields)
                 captured.Add(new PayloadField(field.Name, FormatMember(() => field.GetValue(boxed))));
-            foreach (PropertyInfo property in properties)
+            foreach (PropertyInfo property in plan.Properties)
                 captured.Add(new PayloadField(property.Name, FormatMember(() => property.GetValue(boxed))));
 
-            return new PayloadSnapshot(Plan<T>.TypeName, summary, captured);
+            return new PayloadSnapshot(plan.TypeName, summary, captured);
         }
 
         #endregion
@@ -282,45 +296,61 @@ namespace SideXP.Broadcaster
         #region Per-type plan
 
         /// <summary>
-        /// The reflection work done once per closed event type: its display name, whether it opted out of capture, its public
-        /// instance fields and readable non-indexer properties, and whether it overrides <c>ToString()</c>.
+        /// The reflection work done once per type: its display name, whether it opted out of capture, its public instance fields and
+        /// readable non-indexer properties, and whether it overrides <c>ToString()</c>. Cached by type in <see cref="s_plans"/>.
         /// </summary>
-        private static class Plan<T>
+        private sealed class TypePlan
         {
+            public string TypeName;
+            public bool Omit;
+            public FieldInfo[] Fields;
+            public PropertyInfo[] Properties;
+            public bool HasCustomToString;
+        }
 
-            public static readonly string TypeName;
-            public static readonly bool Omit;
-            public static readonly FieldInfo[] Fields;
-            public static readonly PropertyInfo[] Properties;
-            public static readonly bool HasCustomToString;
+        /// <summary>
+        /// Caches the plan per type. Main-thread only, so a plain dictionary is enough.
+        /// </summary>
+        private static readonly Dictionary<Type, TypePlan> s_plans = new Dictionary<Type, TypePlan>();
 
-            static Plan()
+        /// <summary>
+        /// Returns the cached plan for a type, building it on first use.
+        /// </summary>
+        private static TypePlan GetPlan(Type type)
+        {
+            if (s_plans.TryGetValue(type, out TypePlan plan))
+                return plan;
+
+            plan = BuildPlan(type);
+            s_plans[type] = plan;
+            return plan;
+        }
+
+        private static TypePlan BuildPlan(Type type)
+        {
+            TypePlan plan = new TypePlan { TypeName = type.Name };
+
+            BroadcastAttribute attribute = type.GetCustomAttribute<BroadcastAttribute>(inherit: false);
+            plan.Omit = attribute != null && attribute.OmitSnapshot;
+            if (plan.Omit)
             {
-                Type type = typeof(T);
-                TypeName = type.Name;
-
-                BroadcastAttribute attribute = type.GetCustomAttribute<BroadcastAttribute>(inherit: false);
-                Omit = attribute != null && attribute.OmitSnapshot;
-                if (Omit)
-                {
-                    Fields = Array.Empty<FieldInfo>();
-                    Properties = Array.Empty<PropertyInfo>();
-                    return;
-                }
-
-                Fields = type.GetFields(BindingFlags.Public | BindingFlags.Instance);
-
-                List<PropertyInfo> readable = new List<PropertyInfo>();
-                foreach (PropertyInfo property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
-                {
-                    if (property.CanRead && property.GetIndexParameters().Length == 0)
-                        readable.Add(property);
-                }
-                Properties = readable.ToArray();
-
-                HasCustomToString = PayloadReflector.HasCustomToString(type);
+                plan.Fields = Array.Empty<FieldInfo>();
+                plan.Properties = Array.Empty<PropertyInfo>();
+                return plan;
             }
 
+            plan.Fields = type.GetFields(BindingFlags.Public | BindingFlags.Instance);
+
+            List<PropertyInfo> readable = new List<PropertyInfo>();
+            foreach (PropertyInfo property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.CanRead && property.GetIndexParameters().Length == 0)
+                    readable.Add(property);
+            }
+            plan.Properties = readable.ToArray();
+
+            plan.HasCustomToString = HasCustomToString(type);
+            return plan;
         }
 
         #endregion

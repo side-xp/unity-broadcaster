@@ -431,6 +431,10 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
 
+#if BROADCASTER_MONITOR
+            DispatchSpan span = MonitorBeginDispatch(EventKind.Command, typeof(T), command);
+#endif
+
             if (_handlers.TryGetValue(typeof(T), out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
@@ -438,15 +442,25 @@ namespace SideXP.Broadcaster
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.LogError($"[Broadcaster] The handler for command '{typeof(T).Name}' is asynchronous and can't be run synchronously. Use OrderAsync.");
 #endif
+#if BROADCASTER_MONITOR
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
                     return false;
                 }
 
+#if BROADCASTER_MONITOR
+                MonitorInvokeHandlerVoid(span, registration, () => ((Action<T>)registration.Callback).Invoke(command));
+#else
                 ((Action<T>)registration.Callback).Invoke(command);
+#endif
                 return true;
             }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.LogError($"[Broadcaster] No handler is registered for command '{typeof(T).Name}'. The command was not performed.");
+#endif
+#if BROADCASTER_MONITOR
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
             return false;
         }
@@ -468,14 +482,30 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             Type type = command.GetType();
+#if BROADCASTER_MONITOR
+            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Command, type, command);
+#endif
+
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
+                {
+#if BROADCASTER_MONITOR
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
                     throw new InvalidOperationException($"The handler for command '{type.Name}' is asynchronous and can't be run synchronously. Use OrderAsync.");
+                }
 
+#if BROADCASTER_MONITOR
+                return MonitorInvokeHandler(span, registration, () => ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command));
+#else
                 return ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command);
+#endif
             }
 
+#if BROADCASTER_MONITOR
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
             throw new InvalidOperationException($"No handler is registered for command '{type.Name}', which must report a {typeof(TResult).Name}.");
         }
 
@@ -494,27 +524,59 @@ namespace SideXP.Broadcaster
             EventTypeGuard.Assert<T>();
 
             if (cancellation.IsCancellationRequested)
+            {
+#if BROADCASTER_MONITOR
+                MonitorSyncDispatch(EventKind.Command, typeof(T), command, DispatchOutcome.Cancelled);
+#endif
                 return CanceledAwaitable();
+            }
+
+#if BROADCASTER_MONITOR
+            DispatchSpan span = MonitorBeginDispatch(EventKind.Command, typeof(T), command);
+#endif
 
             if (_handlers.TryGetValue(typeof(T), out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
+                {
+#if BROADCASTER_MONITOR
+                    // Async block: the span and its sub-span stay open until the bridged awaitable resolves.
+                    Awaitable bridged = BridgeAwaitable(() => ((Func<T, Awaitable>)registration.Callback).Invoke(command), registration, cancellation, span);
+                    MonitorRestoreAmbient(span);
+                    return bridged;
+#else
                     return BridgeAwaitable(() => ((Func<T, Awaitable>)registration.Callback).Invoke(command), registration, cancellation);
+#endif
+                }
 
                 // A sync handler through the async verb: run it now and hand back an already-completed (or faulted) awaitable.
+#if BROADCASTER_MONITOR
+                ListenerSpan listenerSpan = MonitorBeginListener(span, registration);
+#endif
                 try
                 {
                     ((Action<T>)registration.Callback).Invoke(command);
+#if BROADCASTER_MONITOR
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+#endif
                     return CompletedAwaitable();
                 }
                 catch (Exception exception)
                 {
+#if BROADCASTER_MONITOR
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
                     return FaultedAwaitable(exception);
                 }
             }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.LogError($"[Broadcaster] No handler is registered for command '{typeof(T).Name}'. The command was not performed.");
+#endif
+#if BROADCASTER_MONITOR
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
 #endif
             return CompletedAwaitable();
         }
@@ -535,25 +597,56 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             if (cancellation.IsCancellationRequested)
+            {
+#if BROADCASTER_MONITOR
+                MonitorSyncDispatchBoxed(EventKind.Command, command.GetType(), command, DispatchOutcome.Cancelled);
+#endif
                 return CanceledAwaitable<TResult>();
+            }
 
             Type type = command.GetType();
+#if BROADCASTER_MONITOR
+            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Command, type, command);
+#endif
+
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
+                {
+#if BROADCASTER_MONITOR
+                    Awaitable<TResult> bridged = BridgeAwaitable(() => ((Func<ICommand<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(command), registration, cancellation, span);
+                    MonitorRestoreAmbient(span);
+                    return bridged;
+#else
                     return BridgeAwaitable(() => ((Func<ICommand<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(command), registration, cancellation);
+#endif
+                }
 
+#if BROADCASTER_MONITOR
+                ListenerSpan listenerSpan = MonitorBeginListener(span, registration);
+#endif
                 try
                 {
                     TResult result = ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command);
+#if BROADCASTER_MONITOR
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+#endif
                     return CompletedAwaitable(result);
                 }
                 catch (Exception exception)
                 {
+#if BROADCASTER_MONITOR
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
                     return FaultedAwaitable<TResult>(exception);
                 }
             }
 
+#if BROADCASTER_MONITOR
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
             return FaultedAwaitable<TResult>(new InvalidOperationException($"No handler is registered for command '{type.Name}', which must report a {typeof(TResult).Name}."));
         }
 
@@ -627,14 +720,30 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             Type type = request.GetType();
+#if BROADCASTER_MONITOR
+            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Request, type, request);
+#endif
+
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
+                {
+#if BROADCASTER_MONITOR
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
                     throw new InvalidOperationException($"The handler for request '{type.Name}' is asynchronous and can't be run synchronously. Use AskAsync.");
+                }
 
+#if BROADCASTER_MONITOR
+                return MonitorInvokeHandler(span, registration, () => ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request));
+#else
                 return ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+#endif
             }
 
+#if BROADCASTER_MONITOR
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
             throw new InvalidOperationException($"No handler is registered to answer request '{type.Name}'.");
         }
 
@@ -654,6 +763,10 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             Type type = request.GetType();
+#if BROADCASTER_MONITOR
+            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Request, type, request);
+#endif
+
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
@@ -661,14 +774,25 @@ namespace SideXP.Broadcaster
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.LogError($"[Broadcaster] The handler for request '{type.Name}' is asynchronous and can't be answered synchronously. Use AskAsync.");
 #endif
+#if BROADCASTER_MONITOR
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
                     result = default;
                     return false;
                 }
 
+#if BROADCASTER_MONITOR
+                result = MonitorInvokeHandler(span, registration, () => ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request));
+#else
                 result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+#endif
                 return true;
             }
 
+#if BROADCASTER_MONITOR
+            // A tolerant miss is not a fault: the ask completed, nothing answered.
+            MonitorEndDispatch(span, DispatchOutcome.Completed);
+#endif
             result = default;
             return false;
         }
@@ -689,25 +813,56 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             if (cancellation.IsCancellationRequested)
+            {
+#if BROADCASTER_MONITOR
+                MonitorSyncDispatchBoxed(EventKind.Request, request.GetType(), request, DispatchOutcome.Cancelled);
+#endif
                 return CanceledAwaitable<TResult>();
+            }
 
             Type type = request.GetType();
+#if BROADCASTER_MONITOR
+            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Request, type, request);
+#endif
+
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
+                {
+#if BROADCASTER_MONITOR
+                    Awaitable<TResult> bridged = BridgeAwaitable(() => ((Func<IRequest<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(request), registration, cancellation, span);
+                    MonitorRestoreAmbient(span);
+                    return bridged;
+#else
                     return BridgeAwaitable(() => ((Func<IRequest<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(request), registration, cancellation);
+#endif
+                }
 
+#if BROADCASTER_MONITOR
+                ListenerSpan listenerSpan = MonitorBeginListener(span, registration);
+#endif
                 try
                 {
                     TResult result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+#if BROADCASTER_MONITOR
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+#endif
                     return CompletedAwaitable(result);
                 }
                 catch (Exception exception)
                 {
+#if BROADCASTER_MONITOR
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
                     return FaultedAwaitable<TResult>(exception);
                 }
             }
 
+#if BROADCASTER_MONITOR
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+#endif
             return FaultedAwaitable<TResult>(new InvalidOperationException($"No handler is registered to answer request '{type.Name}'."));
         }
 
@@ -1383,30 +1538,59 @@ namespace SideXP.Broadcaster
         /// Bridges a durative command handler's <see cref="Awaitable"/> into one the bus controls, so the caller's wait resolves on
         /// completion, on cancellation, on a handler fault, or on the handler being unregistered mid-flight — never hanging.
         /// </summary>
-        private Awaitable BridgeAwaitable(Func<Awaitable> invoke, HandlerRegistration registration, CancellationToken cancellation)
+        private Awaitable BridgeAwaitable(Func<Awaitable> invoke, HandlerRegistration registration, CancellationToken cancellation
+#if BROADCASTER_MONITOR
+            , DispatchSpan span
+#endif
+            )
         {
             AwaitableCompletionSource source = new AwaitableCompletionSource();
             bool resolved = false;
-
             Action cancel = null;
-            cancel = () =>
+            CancellationTokenRegistration tokenRegistration = default;
+#if BROADCASTER_MONITOR
+            ListenerSpan listenerSpan = null;
+#endif
+
+            // Every terminal path funnels through here so the caller's awaitable (and the monitor spans) settle exactly once and the
+            // bus/token registrations are cleaned up.
+            void Resolve(DispatchOutcome outcome, Exception exception)
             {
                 if (resolved)
                     return;
                 resolved = true;
-                source.TrySetCanceled();
+
+                if (outcome == DispatchOutcome.Cancelled)
+                    source.TrySetCanceled();
+                else if (outcome == DispatchOutcome.Faulted)
+                    source.TrySetException(exception);
+                else
+                    source.TrySetResult();
+
+#if BROADCASTER_MONITOR
+                MonitorEndListener(listenerSpan, outcome, exception);
+                MonitorCompleteDispatch(span, outcome);
+#endif
+
                 registration.PendingCancellations?.Remove(cancel);
-            };
+                tokenRegistration.Dispose();
+            }
+
+            // Never-hangs + cancellation fan-out: unregistering the handler mid-flight, or the caller's token firing, cancels the wait.
+            cancel = () => Resolve(DispatchOutcome.Cancelled, null);
             (registration.PendingCancellations ??= new List<Action>()).Add(cancel);
+            tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancel) : default;
 
-            CancellationTokenRegistration tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancel) : default;
-
-            // Registering may have fired the callback synchronously (token already cancelled) — don't invoke the handler if so.
+            // Registering may have fired cancel synchronously (token already cancelled) — don't invoke the handler if so.
             if (resolved)
             {
                 tokenRegistration.Dispose();
                 return source.Awaitable;
             }
+
+#if BROADCASTER_MONITOR
+            listenerSpan = MonitorBeginListener(span, registration);
+#endif
 
             Awaitable inner;
             try
@@ -1415,13 +1599,7 @@ namespace SideXP.Broadcaster
             }
             catch (Exception exception)
             {
-                if (!resolved)
-                {
-                    resolved = true;
-                    source.TrySetException(exception);
-                }
-                registration.PendingCancellations?.Remove(cancel);
-                tokenRegistration.Dispose();
+                Resolve(DispatchOutcome.Faulted, exception);
                 return source.Awaitable;
             }
 
@@ -1433,32 +1611,15 @@ namespace SideXP.Broadcaster
                 try
                 {
                     await inner;
-                    if (!resolved)
-                    {
-                        resolved = true;
-                        source.TrySetResult();
-                    }
+                    Resolve(DispatchOutcome.Completed, null);
                 }
                 catch (OperationCanceledException)
                 {
-                    if (!resolved)
-                    {
-                        resolved = true;
-                        source.TrySetCanceled();
-                    }
+                    Resolve(DispatchOutcome.Cancelled, null);
                 }
                 catch (Exception exception)
                 {
-                    if (!resolved)
-                    {
-                        resolved = true;
-                        source.TrySetException(exception);
-                    }
-                }
-                finally
-                {
-                    registration.PendingCancellations?.Remove(cancel);
-                    tokenRegistration.Dispose();
+                    Resolve(DispatchOutcome.Faulted, exception);
                 }
             }
         }
@@ -1467,29 +1628,56 @@ namespace SideXP.Broadcaster
         /// Bridges a durative command/request handler's <see cref="Awaitable{TResult}"/> into one the bus controls (see
         /// <see cref="BridgeAwaitable(Func{Awaitable}, Registration, CancellationToken)"/>), carrying the handler's result.
         /// </summary>
-        private Awaitable<TResult> BridgeAwaitable<TResult>(Func<Awaitable<TResult>> invoke, HandlerRegistration registration, CancellationToken cancellation)
+        private Awaitable<TResult> BridgeAwaitable<TResult>(Func<Awaitable<TResult>> invoke, HandlerRegistration registration, CancellationToken cancellation
+#if BROADCASTER_MONITOR
+            , DispatchSpan span
+#endif
+            )
         {
             AwaitableCompletionSource<TResult> source = new AwaitableCompletionSource<TResult>();
             bool resolved = false;
-
             Action cancel = null;
-            cancel = () =>
+            CancellationTokenRegistration tokenRegistration = default;
+#if BROADCASTER_MONITOR
+            ListenerSpan listenerSpan = null;
+#endif
+
+            // Every terminal path funnels through here (see the void overload) so the source and the monitor spans settle once.
+            void Resolve(DispatchOutcome outcome, Exception exception, TResult result)
             {
                 if (resolved)
                     return;
                 resolved = true;
-                source.TrySetCanceled();
-                registration.PendingCancellations?.Remove(cancel);
-            };
-            (registration.PendingCancellations ??= new List<Action>()).Add(cancel);
 
-            CancellationTokenRegistration tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancel) : default;
+                if (outcome == DispatchOutcome.Cancelled)
+                    source.TrySetCanceled();
+                else if (outcome == DispatchOutcome.Faulted)
+                    source.TrySetException(exception);
+                else
+                    source.TrySetResult(result);
+
+#if BROADCASTER_MONITOR
+                MonitorEndListener(listenerSpan, outcome, exception);
+                MonitorCompleteDispatch(span, outcome);
+#endif
+
+                registration.PendingCancellations?.Remove(cancel);
+                tokenRegistration.Dispose();
+            }
+
+            cancel = () => Resolve(DispatchOutcome.Cancelled, null, default);
+            (registration.PendingCancellations ??= new List<Action>()).Add(cancel);
+            tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancel) : default;
 
             if (resolved)
             {
                 tokenRegistration.Dispose();
                 return source.Awaitable;
             }
+
+#if BROADCASTER_MONITOR
+            listenerSpan = MonitorBeginListener(span, registration);
+#endif
 
             Awaitable<TResult> inner;
             try
@@ -1498,13 +1686,7 @@ namespace SideXP.Broadcaster
             }
             catch (Exception exception)
             {
-                if (!resolved)
-                {
-                    resolved = true;
-                    source.TrySetException(exception);
-                }
-                registration.PendingCancellations?.Remove(cancel);
-                tokenRegistration.Dispose();
+                Resolve(DispatchOutcome.Faulted, exception, default);
                 return source.Awaitable;
             }
 
@@ -1516,32 +1698,15 @@ namespace SideXP.Broadcaster
                 try
                 {
                     TResult result = await inner;
-                    if (!resolved)
-                    {
-                        resolved = true;
-                        source.TrySetResult(result);
-                    }
+                    Resolve(DispatchOutcome.Completed, null, result);
                 }
                 catch (OperationCanceledException)
                 {
-                    if (!resolved)
-                    {
-                        resolved = true;
-                        source.TrySetCanceled();
-                    }
+                    Resolve(DispatchOutcome.Cancelled, null, default);
                 }
                 catch (Exception exception)
                 {
-                    if (!resolved)
-                    {
-                        resolved = true;
-                        source.TrySetException(exception);
-                    }
-                }
-                finally
-                {
-                    registration.PendingCancellations?.Remove(cancel);
-                    tokenRegistration.Dispose();
+                    Resolve(DispatchOutcome.Faulted, exception, default);
                 }
             }
         }

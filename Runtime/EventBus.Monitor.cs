@@ -84,7 +84,26 @@ namespace SideXP.Broadcaster
             if (!MonitorDispatchActive)
                 return null;
 
-            PayloadSnapshot snapshot = PayloadReflector.Capture(payload);
+            return MonitorOpenSpan(kind, eventType, PayloadReflector.Capture(payload));
+        }
+
+        /// <summary>
+        /// Like <see cref="MonitorBeginDispatch{T}"/> but for a payload whose static type is its marker interface (a valued order or an
+        /// ask): the snapshot is taken off the runtime type so it reflects the concrete event, not the empty interface.
+        /// </summary>
+        private DispatchSpan MonitorBeginDispatchBoxed(EventKind kind, Type eventType, object payload)
+        {
+            if (!MonitorDispatchActive)
+                return null;
+
+            return MonitorOpenSpan(kind, eventType, PayloadReflector.CaptureBoxed(payload));
+        }
+
+        /// <summary>
+        /// Creates the span, makes it the current one, and raises <c>OnSpanBegan</c>. Shared by the two begin-dispatch entry points.
+        /// </summary>
+        private DispatchSpan MonitorOpenSpan(EventKind kind, Type eventType, PayloadSnapshot snapshot)
+        {
             DispatchSpan span = new DispatchSpan(_nextSpanId++, kind, eventType, snapshot, _currentSpan, Time.frameCount, Time.realtimeSinceStartupAsDouble);
             _currentSpan = span;
             OnSpanBegan?.Invoke(span);
@@ -98,6 +117,16 @@ namespace SideXP.Broadcaster
         private void MonitorSyncDispatch<T>(EventKind kind, Type eventType, T payload, DispatchOutcome outcome)
         {
             DispatchSpan span = MonitorBeginDispatch(kind, eventType, payload);
+            MonitorEndDispatch(span, outcome);
+        }
+
+        /// <summary>
+        /// The runtime-type counterpart of <see cref="MonitorSyncDispatch{T}"/>, for an interface-typed payload (a valued order or an ask
+        /// that resolved synchronously with nothing to invoke).
+        /// </summary>
+        private void MonitorSyncDispatchBoxed(EventKind kind, Type eventType, object payload, DispatchOutcome outcome)
+        {
+            DispatchSpan span = MonitorBeginDispatchBoxed(kind, eventType, payload);
             MonitorEndDispatch(span, outcome);
         }
 
@@ -171,6 +200,49 @@ namespace SideXP.Broadcaster
             listener.Exception = exception;
             listener.IsComplete = true;
             OnListenerEnded?.Invoke(listener);
+        }
+
+        /// <summary>
+        /// Invokes a synchronous handler under a sub-span and closes the dispatch's span: completed on success, faulted (then re-thrown so
+        /// the caller still sees the exception) on a throw. Used by the sync handled verbs, whose single handler is a callback like any
+        /// other, and which let a handler's exception propagate.
+        /// </summary>
+        private TResult MonitorInvokeHandler<TResult>(DispatchSpan span, HandlerRegistration registration, Func<TResult> invoke)
+        {
+            ListenerSpan listener = MonitorBeginListener(span, registration);
+            try
+            {
+                TResult result = invoke();
+                MonitorEndListener(listener, DispatchOutcome.Completed, null);
+                MonitorEndDispatch(span, DispatchOutcome.Completed);
+                return result;
+            }
+            catch (Exception exception)
+            {
+                MonitorEndListener(listener, DispatchOutcome.Faulted, exception);
+                MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// The void counterpart of <see cref="MonitorInvokeHandler{TResult}"/>, for a command handler that reports no outcome.
+        /// </summary>
+        private void MonitorInvokeHandlerVoid(DispatchSpan span, HandlerRegistration registration, Action invoke)
+        {
+            ListenerSpan listener = MonitorBeginListener(span, registration);
+            try
+            {
+                invoke();
+                MonitorEndListener(listener, DispatchOutcome.Completed, null);
+                MonitorEndDispatch(span, DispatchOutcome.Completed);
+            }
+            catch (Exception exception)
+            {
+                MonitorEndListener(listener, DispatchOutcome.Faulted, exception);
+                MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                throw;
+            }
         }
 
         #endregion
