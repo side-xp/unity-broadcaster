@@ -256,7 +256,9 @@ namespace SideXP.Broadcaster.Tests
             EventBus bus = new EventBus();
             object owner = new object();
 
-            bus.Obey<DoubleCommand, int>(owner, _ => throw new InvalidOperationException("boom"));
+            // Typed local so the throw-expression lambda binds to the sync overload, not the async one.
+            Func<DoubleCommand, int> throwing = _ => throw new InvalidOperationException("boom");
+            bus.Obey<DoubleCommand, int>(owner, throwing);
 
             // A single handler has no "others" to isolate from, and a valued order must return something — so the fault
             // surfaces to the caller rather than being swallowed like a signal listener's.
@@ -366,10 +368,11 @@ namespace SideXP.Broadcaster.Tests
             EventBus bus = new EventBus();
             object owner = new object();
 
+            // The null handler is typed so it binds one overload — the async twin makes a bare null ambiguous.
             Assert.Throws<ArgumentNullException>(() => bus.Obey<MoveCommand>(null, _ => { }));
-            Assert.Throws<ArgumentNullException>(() => bus.Obey<MoveCommand>(owner, null));
+            Assert.Throws<ArgumentNullException>(() => bus.Obey<MoveCommand>(owner, (Action<MoveCommand>)null));
             Assert.Throws<ArgumentNullException>(() => bus.Obey<DoubleCommand, int>(null, command => command.Value));
-            Assert.Throws<ArgumentNullException>(() => bus.Obey<DoubleCommand, int>(owner, null));
+            Assert.Throws<ArgumentNullException>(() => bus.Obey<DoubleCommand, int>(owner, (Func<DoubleCommand, int>)null));
         }
 
         [Test]
@@ -379,7 +382,7 @@ namespace SideXP.Broadcaster.Tests
             object owner = new object();
 
             Assert.Throws<ArgumentNullException>(() => bus.Answer<SumRequest, int>(null, request => request.A));
-            Assert.Throws<ArgumentNullException>(() => bus.Answer<SumRequest, int>(owner, null));
+            Assert.Throws<ArgumentNullException>(() => bus.Answer<SumRequest, int>(owner, (Func<SumRequest, int>)null));
         }
 
         [Test]

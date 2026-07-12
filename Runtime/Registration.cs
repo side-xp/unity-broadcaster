@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace SideXP.Broadcaster
 {
@@ -59,6 +60,20 @@ namespace SideXP.Broadcaster
         /// Inactive registrations are skipped mid-dispatch and physically dropped once no dispatch is in progress.
         /// </summary>
         public bool Active;
+
+        /// <summary>
+        /// True when this handler returns an <see cref="UnityEngine.Awaitable"/> (registered through an async <c>Obey</c>/<c>Answer</c>
+        /// overload). The synchronous verbs use this to reject a handler they can't complete in one call; only meaningful for handler
+        /// roles.
+        /// </summary>
+        public bool Async;
+
+        /// <summary>
+        /// Cancellation callbacks for the async dispatches currently awaiting this handler, so unregistering it mid-flight resolves those
+        /// callers (cancelled) instead of hanging forever. Lazily created; only handler roles ever populate it. Each in-flight dispatch
+        /// adds its callback here and removes it on completion.
+        /// </summary>
+        public List<Action> PendingCancellations;
 
     }
 

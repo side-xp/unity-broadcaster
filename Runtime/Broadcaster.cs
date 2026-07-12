@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 
 using UnityEngine;
 
@@ -65,8 +66,20 @@ namespace SideXP.Broadcaster
             return Default.Obey(owner, handler, replace);
         }
 
+        /// <inheritdoc cref="EventBus.Obey{T}(object, Func{T, Awaitable}, bool)"/>
+        public static SubscriptionHandle Obey<T>(object owner, Func<T, Awaitable> handler, bool replace = false) where T : ICommand
+        {
+            return Default.Obey(owner, handler, replace);
+        }
+
         /// <inheritdoc cref="EventBus.Obey{T, TResult}(object, Func{T, TResult}, bool)"/>
         public static SubscriptionHandle Obey<T, TResult>(object owner, Func<T, TResult> handler, bool replace = false) where T : ICommand<TResult>
+        {
+            return Default.Obey(owner, handler, replace);
+        }
+
+        /// <inheritdoc cref="EventBus.Obey{T, TResult}(object, Func{T, Awaitable{TResult}}, bool)"/>
+        public static SubscriptionHandle Obey<T, TResult>(object owner, Func<T, Awaitable<TResult>> handler, bool replace = false) where T : ICommand<TResult>
         {
             return Default.Obey(owner, handler, replace);
         }
@@ -83,6 +96,18 @@ namespace SideXP.Broadcaster
             return Default.Order(command);
         }
 
+        /// <inheritdoc cref="EventBus.OrderAsync{T}(T, CancellationToken)"/>
+        public static Awaitable OrderAsync<T>(T command, CancellationToken cancellation = default) where T : ICommand
+        {
+            return Default.OrderAsync(command, cancellation);
+        }
+
+        /// <inheritdoc cref="EventBus.OrderAsync{TResult}(ICommand{TResult}, CancellationToken)"/>
+        public static Awaitable<TResult> OrderAsync<TResult>(ICommand<TResult> command, CancellationToken cancellation = default)
+        {
+            return Default.OrderAsync(command, cancellation);
+        }
+
         #endregion
 
 
@@ -90,6 +115,12 @@ namespace SideXP.Broadcaster
 
         /// <inheritdoc cref="EventBus.Answer{T, TResult}(object, Func{T, TResult}, bool)"/>
         public static SubscriptionHandle Answer<T, TResult>(object owner, Func<T, TResult> handler, bool replace = false) where T : IRequest<TResult>
+        {
+            return Default.Answer(owner, handler, replace);
+        }
+
+        /// <inheritdoc cref="EventBus.Answer{T, TResult}(object, Func{T, Awaitable{TResult}}, bool)"/>
+        public static SubscriptionHandle Answer<T, TResult>(object owner, Func<T, Awaitable<TResult>> handler, bool replace = false) where T : IRequest<TResult>
         {
             return Default.Answer(owner, handler, replace);
         }
@@ -104,6 +135,12 @@ namespace SideXP.Broadcaster
         public static bool TryAsk<TResult>(IRequest<TResult> request, out TResult result)
         {
             return Default.TryAsk(request, out result);
+        }
+
+        /// <inheritdoc cref="EventBus.AskAsync{TResult}(IRequest{TResult}, CancellationToken)"/>
+        public static Awaitable<TResult> AskAsync<TResult>(IRequest<TResult> request, CancellationToken cancellation = default)
+        {
+            return Default.AskAsync(request, cancellation);
         }
 
         #endregion
