@@ -5,8 +5,7 @@ namespace SideXP.Broadcaster
 {
 
     /// <summary>
-    /// What a <see cref="Registration"/> represents. Decides which store holds it and how it is removed. More roles
-    /// (command/request handler, cue performer) are added as those kinds land.
+    /// What a <see cref="Registration"/> represents. Decides which store holds it and how it is removed.
     /// </summary>
     internal enum RegistrationRole
     {
@@ -21,6 +20,9 @@ namespace SideXP.Broadcaster
 
         /// <summary>A request handler, single per type, that answers the question.</summary>
         RequestHandler,
+
+        /// <summary>A cue performer, held in the per-type performer list (0..N per type, like signal listeners).</summary>
+        CuePerformer,
     }
 
     /// <summary>

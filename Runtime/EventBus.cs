@@ -54,6 +54,12 @@ namespace SideXP.Broadcaster
         /// </summary>
         private readonly Dictionary<Type, Registration> _handlers = new Dictionary<Type, Registration>();
 
+        /// <summary>
+        /// Cue performers, keyed by exact cue type. Like signal listeners, a cue has 0..N performers held in a per-type list and invoked
+        /// in registration order; unlike signals, a cue's send awaits every performer's completion (when-all).
+        /// </summary>
+        private readonly Dictionary<Type, List<Registration>> _cuePerformers = new Dictionary<Type, List<Registration>>();
+
         #endregion
 
 
@@ -645,6 +651,139 @@ namespace SideXP.Broadcaster
         #endregion
 
 
+        #region Cues
+
+        /// <summary>
+        /// Registers an <b>instant</b> performer for a cue type. It runs synchronously when the cue is sent and completes immediately.
+        /// </summary>
+        /// <typeparam name="T">The exact cue type to perform.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="performer">The reaction, run synchronously on each cue.</param>
+        /// <returns>A handle that unregisters this performer when disposed.</returns>
+        public SubscriptionHandle Perform<T>(object owner, Action<T> performer) where T : ICue
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (performer == null)
+                throw new ArgumentNullException(nameof(performer));
+
+            MainThreadGuard.Assert();
+            return AddPerformer(typeof(T), owner, performer);
+        }
+
+        /// <summary>
+        /// Registers a <b>durative</b> performer for a cue type. It starts synchronously when the cue is sent and returns an
+        /// <see cref="Awaitable"/> that completes when its reaction finishes; the cue's completion waits for it.
+        /// </summary>
+        /// <param name="performer">The reaction; its first synchronous stretch runs on send, and the returned awaitable marks
+        /// completion.</param>
+        /// <returns>A handle that unregisters this performer when disposed.</returns>
+        /// <inheritdoc cref="Perform{T}(object, Action{T})"/>
+        public SubscriptionHandle Perform<T>(object owner, Func<T, Awaitable> performer) where T : ICue
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (performer == null)
+                throw new ArgumentNullException(nameof(performer));
+
+            MainThreadGuard.Assert();
+            return AddPerformer(typeof(T), owner, performer);
+        }
+
+        /// <summary>
+        /// Registers a <b>callback-style</b> performer for a cue type, for coroutine/callback code that doesn't want to author an
+        /// <see cref="Awaitable"/>. It starts synchronously and receives a <c>done</c> callback it must invoke when its reaction finishes;
+        /// the cue's completion waits for that call.
+        /// </summary>
+        /// <param name="performer">The reaction, receiving the cue and a <c>done</c> callback. It must eventually call <c>done</c> or the
+        /// cue never completes for this performer (until the performer is unregistered).</param>
+        /// <returns>A handle that unregisters this performer when disposed.</returns>
+        /// <inheritdoc cref="Perform{T}(object, Action{T})"/>
+        public SubscriptionHandle Perform<T>(object owner, Action<T, Action> performer) where T : ICue
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (performer == null)
+                throw new ArgumentNullException(nameof(performer));
+
+            MainThreadGuard.Assert();
+            return AddPerformer(typeof(T), owner, performer);
+        }
+
+        /// <summary>
+        /// Sends a cue: every current performer <b>starts synchronously in registration order</b> (an instant performer runs fully, a
+        /// durative/callback one runs its synchronous stretch), then the returned awaitable resolves when the <b>last</b> performer
+        /// finishes (when-all). Zero performers resolves instantly.<br/>
+        /// A throwing performer is isolated (logged with its owner as context) and neither holds up nor kills the others. The awaitable
+        /// resolves as cancelled if <paramref name="cancellation"/> fires (the cancellation fans out to every in-flight performer). A
+        /// performer unregistered mid-cue resolves rather than hanging; the cue still completes on the rest.
+        /// </summary>
+        /// <typeparam name="T">The exact cue type.</typeparam>
+        /// <param name="cue">The cue instance (its fields are the payload).</param>
+        /// <param name="cancellation">Cancels the cue: resolves the awaitable as cancelled and fans out to every in-flight performer.</param>
+        /// <returns>An awaitable that completes when every performer has finished.</returns>
+        public Awaitable Cue<T>(T cue, CancellationToken cancellation = default) where T : ICue
+        {
+            MainThreadGuard.Assert();
+
+            if (cancellation.IsCancellationRequested)
+                return CanceledAwaitable();
+
+            if (!_cuePerformers.TryGetValue(typeof(T), out List<Registration> list) || list.Count == 0)
+                return CompletedAwaitable();
+
+            AwaitableCompletionSource completion = new AwaitableCompletionSource();
+            bool resolved = false;
+
+            // When-all accounting. A "starting" guard (+1) keeps the count above zero while performers are still being started, so an
+            // instant performer completing synchronously mid-loop can't resolve the cue before the later performers have even begun.
+            // The cancellation fan-out is what each performer registers below; when the token fires it drains every in-flight slot, so the
+            // cue resolves here. The last slot to drain decides completed vs cancelled by inspecting the token (a cancelled token means the
+            // drain was the fan-out, not natural completion — this also avoids depending on the order the token invokes its callbacks).
+            int outstanding = 1;
+            void OnPerformerDone()
+            {
+                outstanding--;
+                if (outstanding == 0 && !resolved)
+                {
+                    resolved = true;
+                    if (cancellation.IsCancellationRequested)
+                        completion.TrySetCanceled();
+                    else
+                        completion.TrySetResult();
+                }
+            }
+
+            // Guard the enumeration: an instant performer that unregisters another during its synchronous run defers the structural edit.
+            _dispatchDepth++;
+            try
+            {
+                int count = list.Count;
+                for (int i = 0; i < count; i++)
+                {
+                    Registration registration = list[i];
+                    if (!registration.Active)
+                        continue;
+
+                    outstanding++;
+                    StartCuePerformer(registration, cue, cancellation, OnPerformerDone);
+                }
+            }
+            finally
+            {
+                _dispatchDepth--;
+                if (_dispatchDepth == 0)
+                    RemovePendingRemovals();
+            }
+
+            // Release the starting guard: if every performer already finished (all instant, or none active), the cue resolves now.
+            OnPerformerDone();
+            return completion.Awaitable;
+        }
+
+        #endregion
+
+
         #region Cleanup
 
         /// <summary>
@@ -663,6 +802,18 @@ namespace SideXP.Broadcaster
             try
             {
                 foreach (List<Registration> list in _signalRegistrations.Values)
+                {
+                    foreach (Registration registration in list)
+                    {
+                        if (registration.Active && ReferenceEquals(registration.Owner, owner))
+                        {
+                            Remove(registration);
+                            removed++;
+                        }
+                    }
+                }
+
+                foreach (List<Registration> list in _cuePerformers.Values)
                 {
                     foreach (Registration registration in list)
                     {
@@ -712,6 +863,15 @@ namespace SideXP.Broadcaster
                 foreach (Registration registration in list)
                     registration.Active = false;
             }
+            // Cue performers may be mid-cue: resolve their in-flight slots so any awaiting cue completes rather than hanging.
+            foreach (List<Registration> list in _cuePerformers.Values)
+            {
+                foreach (Registration registration in list)
+                {
+                    registration.Active = false;
+                    CancelInFlight(registration);
+                }
+            }
             foreach (Registration provider in _providers.Values)
                 provider.Active = false;
             foreach (Registration handler in _handlers.Values)
@@ -721,6 +881,7 @@ namespace SideXP.Broadcaster
             }
 
             _signalRegistrations.Clear();
+            _cuePerformers.Clear();
             _providers.Clear();
             _handlers.Clear();
             _pendingRemovals.Clear();
@@ -740,6 +901,17 @@ namespace SideXP.Broadcaster
                 foreach (Registration registration in list)
                     registration.Active = false;
                 _signalRegistrations.Remove(type);
+            }
+
+            if (_cuePerformers.TryGetValue(type, out List<Registration> performers))
+            {
+                // Deactivate and resolve any in-flight performer so an awaiting cue completes instead of hanging.
+                foreach (Registration registration in performers)
+                {
+                    registration.Active = false;
+                    CancelInFlight(registration);
+                }
+                _cuePerformers.Remove(type);
             }
 
             if (_providers.TryGetValue(type, out Registration provider))
@@ -800,6 +972,137 @@ namespace SideXP.Broadcaster
         }
 
         /// <summary>
+        /// Appends a cue performer to the per-type performer list (creating the list on first use). The <paramref name="callback"/> is one
+        /// of the three performer shapes (<see cref="Action{T}"/>, <see cref="Func{T, Awaitable}"/>, or
+        /// <c>Action&lt;T, Action&gt;</c>); <see cref="StartCuePerformer{T}"/> dispatches on its concrete type.
+        /// </summary>
+        private SubscriptionHandle AddPerformer(Type type, object owner, Delegate callback)
+        {
+            if (!_cuePerformers.TryGetValue(type, out List<Registration> list))
+            {
+                list = new List<Registration>();
+                _cuePerformers[type] = list;
+            }
+
+            Registration registration = new Registration
+            {
+                Bus = this,
+                Role = RegistrationRole.CuePerformer,
+                EventType = type,
+                Owner = owner,
+                Callback = callback,
+                Active = true,
+            };
+            list.Add(registration);
+            return new SubscriptionHandle(registration);
+        }
+
+        /// <summary>
+        /// Starts one cue performer synchronously and arranges for <paramref name="onDone"/> to be called exactly once when it finishes —
+        /// whether it completes, faults (isolated: logged, still counts as done), is cancelled by <paramref name="cancellation"/>, or is
+        /// unregistered mid-cue. Dispatches on the performer's concrete delegate type.
+        /// </summary>
+        private void StartCuePerformer<T>(Registration registration, T cue, CancellationToken cancellation, Action onDone) where T : ICue
+        {
+            bool done = false;
+            CancellationTokenRegistration tokenRegistration = default;
+
+            // Called on every terminal path (completion, fault, cancel, unregister); idempotent. Unhooks this performer's cancellation and
+            // disposes its token registration, so every path cleans up exactly once.
+            Action resolve = null;
+            resolve = () =>
+            {
+                if (done)
+                    return;
+                done = true;
+                registration.PendingCancellations?.Remove(resolve);
+                tokenRegistration.Dispose();
+                onDone();
+            };
+
+            // Never-hangs: unregistering this performer mid-cue fires resolve, so the cue's when-all doesn't wait on a gone performer.
+            (registration.PendingCancellations ??= new List<Action>()).Add(resolve);
+            // Cancellation fan-out: the cue's token resolves this performer's slot too (the cue as a whole is cancelled at the send level).
+            tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(resolve) : default;
+
+            // Registering the token may have fired resolve synchronously (already-cancelled token), before the assignment above captured the
+            // registration — so dispose it here and don't start the performer.
+            if (done)
+            {
+                tokenRegistration.Dispose();
+                return;
+            }
+
+            switch (registration.Callback)
+            {
+                // Instant: runs fully synchronously, then completes.
+                case Action<T> instant:
+                    try
+                    {
+                        instant.Invoke(cue);
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+                    }
+                    resolve();
+                    break;
+
+                // Durative: starts synchronously and returns an awaitable; the cue waits for it.
+                case Func<T, Awaitable> durative:
+                    Awaitable inner;
+                    try
+                    {
+                        inner = durative.Invoke(cue);
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+                        resolve();
+                        break;
+                    }
+                    Pump(inner);
+                    break;
+
+                // Callback-style: runs synchronously and is handed a `done` callback that resolves this performer when invoked.
+                case Action<T, Action> callback:
+                    try
+                    {
+                        callback.Invoke(cue, resolve);
+                    }
+                    catch (Exception exception)
+                    {
+                        // A throw during the synchronous stretch is isolated and completes the performer, exactly like the other shapes.
+                        Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+                        resolve();
+                    }
+                    // No resolve() on the happy path: completion is when the performer calls `done` (or is cancelled/unregistered).
+                    break;
+            }
+
+            // Awaits a durative performer's awaitable off the bus, isolating faults and resolving the performer's slot when it settles.
+            async void Pump(Awaitable awaitable)
+            {
+                try
+                {
+                    await awaitable;
+                }
+                catch (OperationCanceledException)
+                {
+                    // The performer honoured a cancellation; its slot still resolves so the cue's when-all proceeds.
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+                }
+                finally
+                {
+                    resolve();
+                }
+            }
+        }
+
+        /// <summary>
         /// Marks a registration inactive and removes it (immediately when no dispatch is in progress), otherwise deferred until the
         /// outermost dispatch ends.
         /// </summary>
@@ -837,6 +1140,17 @@ namespace SideXP.Broadcaster
                 // Same slot guard as providers: only drop it if this exact handler still occupies it.
                 if (_handlers.TryGetValue(registration.EventType, out Registration current) && current == registration)
                     _handlers.Remove(registration.EventType);
+                return;
+            }
+
+            if (registration.Role == RegistrationRole.CuePerformer)
+            {
+                if (_cuePerformers.TryGetValue(registration.EventType, out List<Registration> performers))
+                {
+                    performers.Remove(registration);
+                    if (performers.Count == 0)
+                        _cuePerformers.Remove(registration.EventType);
+                }
                 return;
             }
 

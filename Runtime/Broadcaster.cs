@@ -58,6 +58,35 @@ namespace SideXP.Broadcaster
         #endregion
 
 
+        #region Cues
+
+        /// <inheritdoc cref="EventBus.Perform{T}(object, Action{T})"/>
+        public static SubscriptionHandle Perform<T>(object owner, Action<T> performer) where T : ICue
+        {
+            return Default.Perform(owner, performer);
+        }
+
+        /// <inheritdoc cref="EventBus.Perform{T}(object, Func{T, Awaitable})"/>
+        public static SubscriptionHandle Perform<T>(object owner, Func<T, Awaitable> performer) where T : ICue
+        {
+            return Default.Perform(owner, performer);
+        }
+
+        /// <inheritdoc cref="EventBus.Perform{T}(object, Action{T, Action})"/>
+        public static SubscriptionHandle Perform<T>(object owner, Action<T, Action> performer) where T : ICue
+        {
+            return Default.Perform(owner, performer);
+        }
+
+        /// <inheritdoc cref="EventBus.Cue{T}(T, CancellationToken)"/>
+        public static Awaitable Cue<T>(T cue, CancellationToken cancellation = default) where T : ICue
+        {
+            return Default.Cue(cue, cancellation);
+        }
+
+        #endregion
+
+
         #region Commands
 
         /// <inheritdoc cref="EventBus.Obey{T}(object, Action{T}, bool)"/>

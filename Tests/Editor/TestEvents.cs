@@ -67,4 +67,12 @@ namespace SideXP.Broadcaster.Tests
         public int B;
     }
 
+    /// <summary>
+    /// A cue — 0..N performers react to it (instant, durative, or callback-style) and a sender may await when they've all finished.
+    /// </summary>
+    internal struct FlashCue : ICue
+    {
+        public int Value;
+    }
+
 }

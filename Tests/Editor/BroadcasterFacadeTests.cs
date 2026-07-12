@@ -46,6 +46,18 @@ namespace SideXP.Broadcaster.Tests
             Assert.AreEqual(0, calls);
         }
 
+        [Test]
+        public void Cue_ForwardsToDefaultBus()
+        {
+            object owner = new object();
+            bool performed = false;
+
+            Broadcaster.Perform<FlashCue>(owner, _ => performed = true);
+            Broadcaster.Cue(new FlashCue()).GetAwaiter().GetResult();
+
+            Assert.IsTrue(performed);
+        }
+
     }
 
 }
