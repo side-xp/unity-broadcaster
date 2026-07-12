@@ -304,6 +304,33 @@ namespace SideXP.Broadcaster.Tests
         }
 
         [Test]
+        public void UnsubscribeAll_ResumedCallerReRegisters_DoesNotThrow()
+        {
+            // Resolving an in-flight order resumes its awaiting caller synchronously, from inside the UnsubscribeAll call. That
+            // resumed code may re-register on the bus; this must never corrupt the removal (regression: it used to throw
+            // "collection was modified" out of the caller's cleanup).
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource handler = new AwaitableCompletionSource(); // never completes
+            bus.Obey<MoveCommand>(owner, _ => handler.Awaitable);
+
+            Awaitable.Awaiter awaiter = bus.OrderAsync(new MoveCommand()).GetAwaiter();
+            bool reRegistered = false;
+            awaiter.OnCompleted(() =>
+            {
+                // The resumed caller registers a handler for another type while UnsubscribeAll is still running.
+                bus.Obey<DoubleCommand, int>(new object(), command => command.Value);
+                reRegistered = true;
+            });
+
+            Assert.DoesNotThrow(() => bus.UnsubscribeAll(owner));
+
+            Assert.IsTrue(reRegistered, "The resumed caller ran, and its registration went through.");
+            Assert.Catch<OperationCanceledException>(() => awaiter.GetResult());
+            Assert.AreEqual(2, bus.Order<int>(new DoubleCommand { Value = 2 }), "The re-registered handler is live.");
+        }
+
+        [Test]
         public void OrderAsync_HandlerDisposedMidFlight_ResolvesCancelled()
         {
             EventBus bus = new EventBus();

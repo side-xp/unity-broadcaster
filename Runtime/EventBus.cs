@@ -149,16 +149,33 @@ namespace SideXP.Broadcaster
             list.Add(registration);
 
             // Pull the current value from a live provider, if the caller opted in.
-            if (init && TryGetCurrent(out T current))
+            if (init && _providers.TryGetValue(type, out Registration provider) && provider.Active)
             {
+                bool pulled = false;
+                T current = default;
                 try
                 {
-                    listener.Invoke(current);
+                    current = ((Func<T>)provider.Callback).Invoke();
+                    pulled = true;
                 }
                 catch (Exception exception)
                 {
-                    // Isolate the init call exactly like a dispatched one.
-                    Debug.LogException(exception, owner as UnityEngine.Object);
+                    // A throwing provider is isolated like a throwing listener, logged against the provider's owner (not the
+                    // subscriber's): the subscription itself stands, the init pull is just skipped.
+                    Debug.LogException(exception, provider.Owner as UnityEngine.Object);
+                }
+
+                if (pulled)
+                {
+                    try
+                    {
+                        listener.Invoke(current);
+                    }
+                    catch (Exception exception)
+                    {
+                        // Isolate the init call exactly like a dispatched one.
+                        Debug.LogException(exception, owner as UnityEngine.Object);
+                    }
                 }
             }
 
@@ -796,58 +813,49 @@ namespace SideXP.Broadcaster
             if (owner == null)
                 return 0;
 
-            int removed = 0;
-            // Guard the enumeration so removals are deferred until after we finish walking the lists.
-            _dispatchDepth++;
-            try
+            // Snapshot the owner's registrations before removing anything: removing one can resolve an in-flight async dispatch,
+            // which resumes its awaiting caller synchronously — and that code may re-register on this bus, which would corrupt an
+            // enumeration still walking the stores. No user-authored code can run during this collection pass.
+            List<Registration> owned = new List<Registration>();
+            foreach (List<Registration> list in _signalRegistrations.Values)
             {
-                foreach (List<Registration> list in _signalRegistrations.Values)
+                foreach (Registration registration in list)
                 {
-                    foreach (Registration registration in list)
-                    {
-                        if (registration.Active && ReferenceEquals(registration.Owner, owner))
-                        {
-                            Remove(registration);
-                            removed++;
-                        }
-                    }
-                }
-
-                foreach (List<Registration> list in _cuePerformers.Values)
-                {
-                    foreach (Registration registration in list)
-                    {
-                        if (registration.Active && ReferenceEquals(registration.Owner, owner))
-                        {
-                            Remove(registration);
-                            removed++;
-                        }
-                    }
-                }
-
-                foreach (Registration provider in _providers.Values)
-                {
-                    if (provider.Active && ReferenceEquals(provider.Owner, owner))
-                    {
-                        Remove(provider);
-                        removed++;
-                    }
-                }
-
-                foreach (Registration handler in _handlers.Values)
-                {
-                    if (handler.Active && ReferenceEquals(handler.Owner, owner))
-                    {
-                        Remove(handler);
-                        removed++;
-                    }
+                    if (registration.Active && ReferenceEquals(registration.Owner, owner))
+                        owned.Add(registration);
                 }
             }
-            finally
+
+            foreach (List<Registration> list in _cuePerformers.Values)
             {
-                _dispatchDepth--;
-                if (_dispatchDepth == 0)
-                    RemovePendingRemovals();
+                foreach (Registration registration in list)
+                {
+                    if (registration.Active && ReferenceEquals(registration.Owner, owner))
+                        owned.Add(registration);
+                }
+            }
+
+            foreach (Registration provider in _providers.Values)
+            {
+                if (provider.Active && ReferenceEquals(provider.Owner, owner))
+                    owned.Add(provider);
+            }
+
+            foreach (Registration handler in _handlers.Values)
+            {
+                if (handler.Active && ReferenceEquals(handler.Owner, owner))
+                    owned.Add(handler);
+            }
+
+            int removed = 0;
+            foreach (Registration registration in owned)
+            {
+                // Code resumed by an earlier removal in this loop may have removed this registration already; don't count it twice.
+                if (!registration.Active)
+                    continue;
+
+                Remove(registration);
+                removed++;
             }
             return removed;
         }
@@ -857,34 +865,31 @@ namespace SideXP.Broadcaster
         /// </summary>
         public void Clear()
         {
-            // Deactivate first so any dispatch in progress skips the rest of its listeners.
+            // Snapshot everything before touching anything: resolving the in-flight slots below resumes awaiting callers
+            // synchronously, and those may re-register on this bus — the stores must not be under enumeration when that happens.
+            List<Registration> all = new List<Registration>();
             foreach (List<Registration> list in _signalRegistrations.Values)
-            {
-                foreach (Registration registration in list)
-                    registration.Active = false;
-            }
-            // Cue performers may be mid-cue: resolve their in-flight slots so any awaiting cue completes rather than hanging.
+                all.AddRange(list);
             foreach (List<Registration> list in _cuePerformers.Values)
-            {
-                foreach (Registration registration in list)
-                {
-                    registration.Active = false;
-                    CancelInFlight(registration);
-                }
-            }
-            foreach (Registration provider in _providers.Values)
-                provider.Active = false;
-            foreach (Registration handler in _handlers.Values)
-            {
-                handler.Active = false;
-                CancelInFlight(handler);
-            }
+                all.AddRange(list);
+            all.AddRange(_providers.Values);
+            all.AddRange(_handlers.Values);
+
+            // Deactivate first so any dispatch in progress skips the rest of its listeners (the list objects it captured stay
+            // alive), then empty the stores.
+            foreach (Registration registration in all)
+                registration.Active = false;
 
             _signalRegistrations.Clear();
             _cuePerformers.Clear();
             _providers.Clear();
             _handlers.Clear();
             _pendingRemovals.Clear();
+
+            // Resolve the in-flight slots last (cue performers mid-cue, handlers mid-order/ask), so any awaiting caller completes
+            // rather than hanging. Anything the resumed code re-registers lands in the freshly emptied stores and is kept.
+            foreach (Registration registration in all)
+                CancelInFlight(registration);
         }
 
         /// <summary>
@@ -894,38 +899,44 @@ namespace SideXP.Broadcaster
         public void Clear<T>() where T : IEvent
         {
             Type type = typeof(T);
-            if (_signalRegistrations.TryGetValue(type, out List<Registration> list))
-            {
-                // Deactivate first so any dispatch in progress skips these; the list object stays alive for in-flight
-                // loops that already captured it.
-                foreach (Registration registration in list)
-                    registration.Active = false;
-                _signalRegistrations.Remove(type);
-            }
 
-            if (_cuePerformers.TryGetValue(type, out List<Registration> performers))
+            // Detach and deactivate everything for the type first, and only then resolve the in-flight slots: resolving resumes
+            // awaiting callers synchronously, and those must already see a bus without these registrations (they may freely
+            // re-register — that lands in a fresh store entry, never the detached one). Deactivating first also makes any
+            // dispatch in progress skip these registrations (the list objects it captured stay alive).
+            _signalRegistrations.TryGetValue(type, out List<Registration> listeners);
+            _signalRegistrations.Remove(type);
+            _cuePerformers.TryGetValue(type, out List<Registration> performers);
+            _cuePerformers.Remove(type);
+            _providers.TryGetValue(type, out Registration provider);
+            _providers.Remove(type);
+            _handlers.TryGetValue(type, out Registration handler);
+            _handlers.Remove(type);
+
+            if (listeners != null)
             {
-                // Deactivate and resolve any in-flight performer so an awaiting cue completes instead of hanging.
+                foreach (Registration registration in listeners)
+                    registration.Active = false;
+            }
+            if (performers != null)
+            {
                 foreach (Registration registration in performers)
-                {
                     registration.Active = false;
-                    CancelInFlight(registration);
-                }
-                _cuePerformers.Remove(type);
             }
-
-            if (_providers.TryGetValue(type, out Registration provider))
-            {
+            if (provider != null)
                 provider.Active = false;
-                _providers.Remove(type);
-            }
-
-            if (_handlers.TryGetValue(type, out Registration handler))
-            {
+            if (handler != null)
                 handler.Active = false;
-                CancelInFlight(handler);
-                _handlers.Remove(type);
+
+            // Resolve any in-flight cue or async order/ask on the cleared registrations so awaiting callers complete rather than
+            // hanging.
+            if (performers != null)
+            {
+                foreach (Registration registration in performers)
+                    CancelInFlight(registration);
             }
+            if (handler != null)
+                CancelInFlight(handler);
         }
 
         #endregion

@@ -308,6 +308,67 @@ namespace SideXP.Broadcaster.Tests
             awaiter.GetResult();
         }
 
+        // The three tests below pin the same regression for each bulk-removal path: resolving an in-flight cue resumes its
+        // awaiting caller synchronously, from inside the removal call — and that resumed code may re-register on the bus. This
+        // must never corrupt the removal (it used to throw "collection was modified" out of the caller's cleanup).
+
+        [Test]
+        public void Cue_CallerResumedByUnsubscribeAllReRegisters_DoesNotThrow()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource never = new AwaitableCompletionSource();
+            bus.Perform<FlashCue>(owner, _ => never.Awaitable);
+
+            Awaitable.Awaiter awaiter = bus.Cue(new FlashCue()).GetAwaiter();
+            bool reRegistered = false;
+            awaiter.OnCompleted(() =>
+            {
+                bus.Perform<FlashCue>(new object(), _ => { });
+                reRegistered = true;
+            });
+
+            Assert.DoesNotThrow(() => bus.UnsubscribeAll(owner));
+            Assert.IsTrue(reRegistered, "The resumed caller ran, and its registration went through.");
+        }
+
+        [Test]
+        public void Cue_CallerResumedByClearReRegisters_DoesNotThrowAndRegistrationIsKept()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource never = new AwaitableCompletionSource();
+            bus.Perform<FlashCue>(owner, _ => never.Awaitable);
+
+            Awaitable.Awaiter awaiter = bus.Cue(new FlashCue()).GetAwaiter();
+            bool performed = false;
+            awaiter.OnCompleted(() => bus.Perform<FlashCue>(new object(), _ => performed = true));
+
+            Assert.DoesNotThrow(() => bus.Clear());
+
+            // What the resumed caller registered arrived after the wipe, so it must survive it.
+            bus.Cue(new FlashCue()).GetAwaiter().GetResult();
+            Assert.IsTrue(performed, "A registration made by code resumed during Clear is kept, not wiped.");
+        }
+
+        [Test]
+        public void Cue_CallerResumedByClearOfTypeReRegisters_DoesNotThrowAndRegistrationIsKept()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource never = new AwaitableCompletionSource();
+            bus.Perform<FlashCue>(owner, _ => never.Awaitable);
+
+            Awaitable.Awaiter awaiter = bus.Cue(new FlashCue()).GetAwaiter();
+            bool performed = false;
+            awaiter.OnCompleted(() => bus.Perform<FlashCue>(new object(), _ => performed = true));
+
+            Assert.DoesNotThrow(() => bus.Clear<FlashCue>());
+
+            bus.Cue(new FlashCue()).GetAwaiter().GetResult();
+            Assert.IsTrue(performed, "A registration made by code resumed during Clear<T> is kept, not wiped.");
+        }
+
         #endregion
 
 

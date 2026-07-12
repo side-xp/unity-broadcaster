@@ -87,6 +87,28 @@ namespace SideXP.Broadcaster.Tests
             Assert.AreEqual(0, calls, "A released provider must not feed a later init (anti-stale).");
         }
 
+        [Test]
+        public void Subscribe_InitWithThrowingProvider_IsIsolatedAndSubscriptionStands()
+        {
+            EventBus bus = new EventBus();
+            object providerOwner = new object();
+            object subscriberOwner = new object();
+            int received = 0;
+
+            bus.Provide<PingSignal>(providerOwner, () => throw new InvalidOperationException("boom"));
+
+            // The provider's exception is isolated (logged against the provider's owner), never thrown at the subscriber.
+            LogAssert.Expect(LogType.Exception, new Regex("boom"));
+            SubscriptionHandle handle = default;
+            Assert.DoesNotThrow(() => handle = bus.Subscribe<PingSignal>(subscriberOwner, _ => received++, init: true));
+
+            Assert.AreEqual(0, received, "The init pull is skipped when the provider throws.");
+            Assert.IsTrue(handle.IsActive, "The subscription itself still stands.");
+
+            bus.Emit(new PingSignal { Value = 1 });
+            Assert.AreEqual(1, received, "The listener registered by the throwing-init call receives later emits.");
+        }
+
         #endregion
 
 
