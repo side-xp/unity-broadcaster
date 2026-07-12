@@ -1,9 +1,9 @@
 {
   "name": "com.side-xp.broadcaster",
   "version": "0.0.0",
-  "description": "Asset-based event communication system.",
+  "description": "Code-first, type-keyed event bus for decoupled communication in Unity games and packages.",
   "displayName": "SideXP - Broadcaster",
-  "unity": "2021.3",
+  "unity": "6000.0",
   "author": {
     "name": "Sideways Experiments",
     "email": "dev@side-xp.com",
