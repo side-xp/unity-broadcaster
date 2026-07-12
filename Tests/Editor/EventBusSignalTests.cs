@@ -124,6 +124,24 @@ namespace SideXP.Broadcaster.Tests
         }
 
         [Test]
+        public void Emit_ListenerUnsubscribedDuringDispatch_NotInvokedAfterwards()
+        {
+            // Same guarantee as the handle-based removal above, through the delegate-based removal route.
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bool secondRan = false;
+            Action<PingSignal> second = _ => secondRan = true;
+
+            // The first listener unsubscribes the second (by delegate) before the dispatch reaches it.
+            bus.Subscribe<PingSignal>(owner, _ => bus.Unsubscribe(second));
+            bus.Subscribe(owner, second);
+
+            bus.Emit(new PingSignal());
+
+            Assert.IsFalse(secondRan, "A registration unsubscribed during a dispatch must not be invoked afterwards in it.");
+        }
+
+        [Test]
         public void Emit_ReentrantEmitSameType_DoesNotCorruptIteration()
         {
             EventBus bus = new EventBus();

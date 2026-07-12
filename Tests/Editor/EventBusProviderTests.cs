@@ -109,6 +109,30 @@ namespace SideXP.Broadcaster.Tests
             Assert.AreEqual(1, received, "The listener registered by the throwing-init call receives later emits.");
         }
 
+        [Test]
+        public void Subscribe_InitProviderReEntersBus_IsSafe()
+        {
+            // The init pull runs the provider's callback inside the bus: a provider that re-enters the bus from there
+            // (registers something, removes itself) must never corrupt the subscription being made.
+            EventBus bus = new EventBus();
+            object providerOwner = new object();
+            object subscriberOwner = new object();
+
+            SubscriptionHandle providerHandle = default;
+            providerHandle = bus.Provide<PingSignal>(providerOwner, () =>
+            {
+                bus.Subscribe<PongSignal>(providerOwner, _ => { });
+                providerHandle.Dispose(); // a one-shot provider removing itself mid-pull
+                return new PingSignal { Value = 7 };
+            });
+
+            int received = 0;
+            Assert.DoesNotThrow(() => bus.Subscribe<PingSignal>(subscriberOwner, signal => received = signal.Value, init: true));
+
+            Assert.AreEqual(7, received, "The init pull still delivers the value the re-entrant provider returned.");
+            Assert.IsFalse(bus.TryGetCurrent<PingSignal>(out _), "The provider removed itself during the pull.");
+        }
+
         #endregion
 
 
