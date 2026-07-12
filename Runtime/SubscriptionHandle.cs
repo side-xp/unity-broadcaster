@@ -40,7 +40,7 @@ namespace SideXP.Broadcaster
         public void Dispose()
         {
             if (_registration != null && _registration.Active)
-                _registration.Bus.Remove(_registration);
+                _registration.Bus.Remove(_registration, RegistrationChangeReason.Disposed);
         }
 
     }

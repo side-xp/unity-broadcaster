@@ -1,0 +1,335 @@
+#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !BROADCASTER_MONITOR_OFF
+#define BROADCASTER_MONITOR
+#endif
+
+#if BROADCASTER_MONITOR
+using System;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
+
+using NUnit.Framework;
+
+using UnityEngine;
+using UnityEngine.TestTools;
+
+namespace SideXP.Broadcaster.Tests
+{
+
+    /// <summary>
+    /// Tests for the monitor hooks on signal dispatch and on registration changes: the exact begin/end sequence of a dispatch and its
+    /// callback sub-spans, the fields each span carries (kind, type, payload snapshot, outcome), synchronous-cascade causality (a nested
+    /// emit's parent is the emit it ran inside of), and the role/reason reported when registrations come and go. Every test uses a fresh
+    /// <see cref="EventBus"/> and attaches a <see cref="Recorder"/>.
+    /// </summary>
+    public class MonitorHookTests
+    {
+
+        #region Helpers
+
+        /// <summary>Records the hook stream of a bus for assertions.</summary>
+        private sealed class Recorder
+        {
+            public readonly List<string> Sequence = new List<string>();
+            public readonly List<DispatchSpan> SpansBegan = new List<DispatchSpan>();
+            public readonly List<DispatchSpan> SpansEnded = new List<DispatchSpan>();
+            public readonly List<ListenerSpan> ListenersEnded = new List<ListenerSpan>();
+            public readonly List<RegistrationInfo> Registered = new List<RegistrationInfo>();
+            public readonly List<RegistrationInfo> Unregistered = new List<RegistrationInfo>();
+
+            public Recorder(EventBus bus)
+            {
+                bus.OnSpanBegan += span => { Sequence.Add("span+"); SpansBegan.Add(span); };
+                bus.OnSpanEnded += span => { Sequence.Add("span-"); SpansEnded.Add(span); };
+                bus.OnListenerBegan += _ => Sequence.Add("listener+");
+                bus.OnListenerEnded += listener => { Sequence.Add("listener-"); ListenersEnded.Add(listener); };
+                bus.OnRegistered += info => Registered.Add(info);
+                bus.OnUnregistered += info => Unregistered.Add(info);
+            }
+        }
+
+        /// <summary>Returns the captured value of a snapshot field by name.</summary>
+        private static string ValueOf(PayloadSnapshot snapshot, string name)
+        {
+            foreach (PayloadField field in snapshot.Fields)
+            {
+                if (field.Name == name)
+                    return field.Value;
+            }
+            Assert.Fail($"Expected a captured member named '{name}'. Snapshot: {snapshot}");
+            return null;
+        }
+
+        #endregion
+
+
+        #region Dispatch spans
+
+        [Test]
+        public void Emit_OneListener_ProducesSpanWithOneSubSpan()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Subscribe<PingSignal>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bus.Emit(new PingSignal { Value = 7 });
+
+            CollectionAssert.AreEqual(new[] { "span+", "listener+", "listener-", "span-" }, recorder.Sequence);
+
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(1, span.Id, "The first span on a fresh bus has id 1.");
+            Assert.AreEqual(EventKind.Signal, span.Kind);
+            Assert.AreEqual(typeof(PingSignal), span.EventType);
+            Assert.AreEqual("7", ValueOf(span.Payload, nameof(PingSignal.Value)));
+            Assert.IsTrue(span.IsComplete);
+            Assert.AreEqual(DispatchOutcome.Completed, span.Outcome);
+            Assert.AreSame(span, recorder.SpansEnded[0], "SpanBegan and SpanEnded carry the same instance.");
+
+            Assert.AreEqual(1, span.Listeners.Count);
+            ListenerSpan listener = span.Listeners[0];
+            Assert.AreSame(owner, listener.Owner);
+            Assert.AreEqual(RegistrationRole.SignalListener, listener.Role);
+            Assert.AreEqual(DispatchOutcome.Completed, listener.Outcome);
+            Assert.IsTrue(listener.IsComplete);
+        }
+
+        [Test]
+        public void Emit_ZeroListeners_ProducesAnEmptySpan()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            bus.Emit(new PingSignal { Value = 1 });
+
+            CollectionAssert.AreEqual(new[] { "span+", "span-" }, recorder.Sequence);
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count, "Nobody listened, so the span has no sub-spans.");
+            Assert.AreEqual(DispatchOutcome.Completed, recorder.SpansBegan[0].Outcome);
+        }
+
+        [Test]
+        public void Emit_TwoListeners_SubSpansInOrder()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Subscribe<PingSignal>(owner, _ => { });
+            bus.Subscribe<PingSignal>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bus.Emit(new PingSignal());
+
+            CollectionAssert.AreEqual(new[] { "span+", "listener+", "listener-", "listener+", "listener-", "span-" }, recorder.Sequence);
+            Assert.AreEqual(2, recorder.SpansBegan[0].Listeners.Count);
+        }
+
+        [Test]
+        public void Emit_ThrowingListener_SubSpanFaultedDispatchCompleted()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Subscribe<PingSignal>(owner, _ => throw new InvalidOperationException("boom"));
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Exception, new Regex("boom"));
+            bus.Emit(new PingSignal());
+
+            ListenerSpan listener = recorder.ListenersEnded[0];
+            Assert.AreEqual(DispatchOutcome.Faulted, listener.Outcome);
+            Assert.IsNotNull(listener.Exception);
+            Assert.AreEqual("boom", listener.Exception.Message);
+            Assert.AreEqual(DispatchOutcome.Completed, recorder.SpansEnded[0].Outcome, "A faulting listener is isolated; the dispatch still completes.");
+        }
+
+        #endregion
+
+
+        #region Causality
+
+        [Test]
+        public void Emit_NestedFromListener_InnerSpanParentIsOuter()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Subscribe<PingSignal>(owner, _ => bus.Emit(new PongSignal { Text = "x" }));
+            bus.Subscribe<PongSignal>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bus.Emit(new PingSignal());
+
+            CollectionAssert.AreEqual(
+                new[] { "span+", "listener+", "span+", "listener+", "listener-", "span-", "listener-", "span-" },
+                recorder.Sequence,
+                "The inner dispatch opens and closes entirely inside the outer listener's sub-span.");
+
+            DispatchSpan outer = recorder.SpansBegan[0];
+            DispatchSpan inner = recorder.SpansBegan[1];
+            Assert.AreEqual(typeof(PingSignal), outer.EventType);
+            Assert.AreEqual(typeof(PongSignal), inner.EventType);
+            Assert.IsNull(outer.Parent, "The top-level emit has no parent.");
+            Assert.AreSame(outer, inner.Parent, "The nested emit's parent is the emit it ran inside of.");
+        }
+
+        [Test]
+        public void Emit_AfterCascade_NextTopLevelSpanHasNoParent()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Subscribe<PingSignal>(owner, _ => bus.Emit(new PongSignal()));
+            bus.Subscribe<PongSignal>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bus.Emit(new PingSignal());
+            bus.Emit(new PingSignal());
+
+            // The ambient span is restored after each cascade, so the second top-level emit is parentless.
+            DispatchSpan secondTopLevel = recorder.SpansBegan[2];
+            Assert.AreEqual(typeof(PingSignal), secondTopLevel.EventType);
+            Assert.IsNull(secondTopLevel.Parent);
+        }
+
+        #endregion
+
+
+        #region Registration changes
+
+        [Test]
+        public void Subscribe_ReportsSignalListenerRegistration()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            Recorder recorder = new Recorder(bus);
+
+            bus.Subscribe<PingSignal>(owner, _ => { });
+
+            Assert.AreEqual(1, recorder.Registered.Count);
+            RegistrationInfo info = recorder.Registered[0];
+            Assert.AreEqual(EventKind.Signal, info.Kind);
+            Assert.AreEqual(RegistrationRole.SignalListener, info.Role);
+            Assert.AreEqual(typeof(PingSignal), info.EventType);
+            Assert.AreSame(owner, info.Owner);
+            Assert.AreEqual(RegistrationChangeReason.Registered, info.Reason);
+        }
+
+        [Test]
+        public void Provide_ReportsProviderRegistration()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            bus.Provide<PingSignal>(new object(), () => new PingSignal());
+
+            Assert.AreEqual(RegistrationRole.Provider, recorder.Registered[0].Role);
+            Assert.AreEqual(EventKind.Signal, recorder.Registered[0].Kind);
+        }
+
+        [Test]
+        public void Obey_ReportsCommandHandlerRegistration()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            bus.Obey<MoveCommand>(new object(), _ => { });
+
+            Assert.AreEqual(RegistrationRole.CommandHandler, recorder.Registered[0].Role);
+            Assert.AreEqual(EventKind.Command, recorder.Registered[0].Kind);
+        }
+
+        [Test]
+        public void Answer_ReportsRequestHandlerRegistration()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            bus.Answer<SumRequest, int>(new object(), request => request.A + request.B);
+
+            Assert.AreEqual(RegistrationRole.RequestHandler, recorder.Registered[0].Role);
+            Assert.AreEqual(EventKind.Request, recorder.Registered[0].Kind);
+        }
+
+        [Test]
+        public void Perform_ReportsCuePerformerRegistration()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            bus.Perform<FlashCue>(new object(), _ => { });
+
+            Assert.AreEqual(RegistrationRole.CuePerformer, recorder.Registered[0].Role);
+            Assert.AreEqual(EventKind.Cue, recorder.Registered[0].Kind);
+        }
+
+        [Test]
+        public void Unsubscribe_ReportsUnsubscribedReason()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            Action<PingSignal> listener = _ => { };
+            bus.Subscribe(owner, listener);
+            Recorder recorder = new Recorder(bus);
+
+            bus.Unsubscribe(listener);
+
+            Assert.AreEqual(1, recorder.Unregistered.Count);
+            Assert.AreEqual(RegistrationChangeReason.Unsubscribed, recorder.Unregistered[0].Reason);
+        }
+
+        [Test]
+        public void HandleDispose_ReportsDisposedReason()
+        {
+            EventBus bus = new EventBus();
+            SubscriptionHandle handle = bus.Subscribe<PingSignal>(new object(), _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            handle.Dispose();
+
+            Assert.AreEqual(RegistrationChangeReason.Disposed, recorder.Unregistered[0].Reason);
+        }
+
+        [Test]
+        public void UnsubscribeAll_ReportsRemovedByOwnerReason()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Subscribe<PingSignal>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bus.UnsubscribeAll(owner);
+
+            Assert.AreEqual(RegistrationChangeReason.RemovedByOwner, recorder.Unregistered[0].Reason);
+        }
+
+        [Test]
+        public void Clear_ReportsClearedReason()
+        {
+            EventBus bus = new EventBus();
+            bus.Subscribe<PingSignal>(new object(), _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bus.Clear();
+
+            Assert.AreEqual(1, recorder.Unregistered.Count);
+            Assert.AreEqual(RegistrationChangeReason.Cleared, recorder.Unregistered[0].Reason);
+        }
+
+        [Test]
+        public void Provide_Replace_ReportsReplacedThenRegistered()
+        {
+            EventBus bus = new EventBus();
+            object first = new object();
+            object second = new object();
+            Recorder recorder = new Recorder(bus);
+
+            bus.Provide<PingSignal>(first, () => new PingSignal());
+            bus.Provide<PingSignal>(second, () => new PingSignal(), replace: true);
+
+            Assert.AreEqual(1, recorder.Unregistered.Count);
+            Assert.AreEqual(RegistrationChangeReason.Replaced, recorder.Unregistered[0].Reason);
+            Assert.AreSame(first, recorder.Unregistered[0].Owner, "The superseded provider is the one reported as replaced.");
+            Assert.AreEqual(2, recorder.Registered.Count, "Both the original and the replacement are reported as registered.");
+        }
+
+        #endregion
+
+    }
+
+}
+#endif

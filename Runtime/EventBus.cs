@@ -1,3 +1,7 @@
+#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !BROADCASTER_MONITOR_OFF
+#define BROADCASTER_MONITOR
+#endif
+
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -13,7 +17,7 @@ namespace SideXP.Broadcaster
     /// This instantiable core holds all state and logic. You should prefer using <see cref="Broadcaster"/> façade at runtime, instead of
     /// using this class directly. But it's useful if you need an isolated or temporary events bus, eg. for testing.
     /// </summary>
-    public sealed class EventBus
+    public sealed partial class EventBus
     {
 
         #region Fields
@@ -77,39 +81,59 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
 
-            if (!_signalRegistrations.TryGetValue(typeof(T), out List<ListenerRegistration> list))
-                return;
+            _signalRegistrations.TryGetValue(typeof(T), out List<ListenerRegistration> list);
 
-            _dispatchDepth++;
-            try
+#if BROADCASTER_MONITOR
+            // Record the emit even when nobody listens, so "nothing happened" is observable on the timeline.
+            DispatchSpan span = MonitorBeginDispatch(EventKind.Signal, typeof(T), signal);
+#endif
+
+            if (list != null)
             {
-                // Snapshot the count so registrations appended during this dispatch are not invoked by it.
-                int count = list.Count;
-                for (int i = 0; i < count; i++)
+                _dispatchDepth++;
+                try
                 {
-                    ListenerRegistration registration = list[i];
-                    // A registration removed during this dispatch is skipped rather than invoked.
-                    if (!registration.Active)
-                        continue;
+                    // Snapshot the count so registrations appended during this dispatch are not invoked by it.
+                    int count = list.Count;
+                    for (int i = 0; i < count; i++)
+                    {
+                        ListenerRegistration registration = list[i];
+                        // A registration removed during this dispatch is skipped rather than invoked.
+                        if (!registration.Active)
+                            continue;
 
-                    try
-                    {
-                        // Exact cast back to the concrete delegate type: the payload is never boxed on the hot path.
-                        ((Action<T>)registration.Callback).Invoke(signal);
-                    }
-                    catch (Exception exception)
-                    {
-                        // Exception isolation: log with the owner as Unity context object, then carry on.
-                        Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+#if BROADCASTER_MONITOR
+                        ListenerSpan listenerSpan = MonitorBeginListener(span, registration);
+#endif
+                        try
+                        {
+                            // Exact cast back to the concrete delegate type: the payload is never boxed on the hot path.
+                            ((Action<T>)registration.Callback).Invoke(signal);
+#if BROADCASTER_MONITOR
+                            MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+#endif
+                        }
+                        catch (Exception exception)
+                        {
+                            // Exception isolation: log with the owner as Unity context object, then carry on.
+                            Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+#if BROADCASTER_MONITOR
+                            MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+#endif
+                        }
                     }
                 }
+                finally
+                {
+                    _dispatchDepth--;
+                    if (_dispatchDepth == 0)
+                        RemovePendingRemovals();
+                }
             }
-            finally
-            {
-                _dispatchDepth--;
-                if (_dispatchDepth == 0)
-                    RemovePendingRemovals();
-            }
+
+#if BROADCASTER_MONITOR
+            MonitorEndDispatch(span, DispatchOutcome.Completed);
+#endif
         }
 
         /// <summary>
@@ -148,6 +172,9 @@ namespace SideXP.Broadcaster
                 Active = true,
             };
             list.Add(registration);
+#if BROADCASTER_MONITOR
+            MonitorRegistered(registration);
+#endif
 
             // Pull the current value from a live provider, if the caller opted in.
             if (init && _providers.TryGetValue(type, out ProviderRegistration provider) && provider.Active)
@@ -206,7 +233,7 @@ namespace SideXP.Broadcaster
             {
                 if (registration.Active && registration.Callback.Equals(listener))
                 {
-                    Remove(registration);
+                    Remove(registration, RegistrationChangeReason.Unsubscribed);
                     return true;
                 }
             }
@@ -255,6 +282,9 @@ namespace SideXP.Broadcaster
                 // Supersede the incumbent: deactivate it so its handle and any pending removal become no-ops, then let the slot be
                 // overwritten below. The outgoing owner's later cleanup won't find it in the slot anymore.
                 existing.Active = false;
+#if BROADCASTER_MONITOR
+                MonitorUnregistered(existing, RegistrationChangeReason.Replaced);
+#endif
             }
 
             ProviderRegistration registration = new ProviderRegistration
@@ -266,6 +296,9 @@ namespace SideXP.Broadcaster
                 Active = true,
             };
             _providers[type] = registration;
+#if BROADCASTER_MONITOR
+            MonitorRegistered(registration);
+#endif
             return new SubscriptionHandle(registration);
         }
 
@@ -873,7 +906,7 @@ namespace SideXP.Broadcaster
                 if (!registration.Active)
                     continue;
 
-                Remove(registration);
+                Remove(registration, RegistrationChangeReason.RemovedByOwner);
                 removed++;
             }
             return removed;
@@ -897,9 +930,19 @@ namespace SideXP.Broadcaster
             all.AddRange(_handlers.Values);
 
             // Deactivate first so any dispatch in progress skips the rest of its listeners (the list objects it captured stay
-            // alive), then empty the stores.
+            // alive), then empty the stores. Collect the ones that were still active so the monitor reports each exactly once
+            // (an already-inactive registration was reported when it was removed).
+#if BROADCASTER_MONITOR
+            List<Registration> cleared = new List<Registration>();
+#endif
             foreach (Registration registration in all)
+            {
+#if BROADCASTER_MONITOR
+                if (registration.Active)
+                    cleared.Add(registration);
+#endif
                 registration.Active = false;
+            }
 
             _signalRegistrations.Clear();
             _cuePerformers.Clear();
@@ -911,6 +954,12 @@ namespace SideXP.Broadcaster
             // rather than hanging. Anything the resumed code re-registers lands in the freshly emptied stores and is kept.
             foreach (Registration registration in all)
                 registration.CancelInFlight();
+
+#if BROADCASTER_MONITOR
+            // Reported after the wipe, so a hook consumer that re-registers is kept (like a resumed caller), not wiped.
+            foreach (Registration registration in cleared)
+                MonitorUnregistered(registration, RegistrationChangeReason.Cleared);
+#endif
         }
 
         /// <summary>
@@ -937,20 +986,47 @@ namespace SideXP.Broadcaster
             _handlers.TryGetValue(type, out HandlerRegistration handler);
             _handlers.Remove(type);
 
+#if BROADCASTER_MONITOR
+            List<Registration> cleared = new List<Registration>();
+#endif
             if (listeners != null)
             {
                 foreach (Registration registration in listeners)
+                {
+#if BROADCASTER_MONITOR
+                    if (registration.Active)
+                        cleared.Add(registration);
+#endif
                     registration.Active = false;
+                }
             }
             if (performers != null)
             {
                 foreach (Registration registration in performers)
+                {
+#if BROADCASTER_MONITOR
+                    if (registration.Active)
+                        cleared.Add(registration);
+#endif
                     registration.Active = false;
+                }
             }
             if (provider != null)
+            {
+#if BROADCASTER_MONITOR
+                if (provider.Active)
+                    cleared.Add(provider);
+#endif
                 provider.Active = false;
+            }
             if (handler != null)
+            {
+#if BROADCASTER_MONITOR
+                if (handler.Active)
+                    cleared.Add(handler);
+#endif
                 handler.Active = false;
+            }
 
             // Resolve any in-flight cue or async order/ask on the cleared registrations so awaiting callers complete rather than
             // hanging.
@@ -961,6 +1037,12 @@ namespace SideXP.Broadcaster
             }
             if (handler != null)
                 handler.CancelInFlight();
+
+#if BROADCASTER_MONITOR
+            // Reported after the wipe, so a hook consumer that re-registers is kept (like a resumed caller), not wiped.
+            foreach (Registration registration in cleared)
+                MonitorUnregistered(registration, RegistrationChangeReason.Cleared);
+#endif
         }
 
         #endregion
@@ -990,6 +1072,9 @@ namespace SideXP.Broadcaster
                 existing.Active = false;
                 // The superseded handler is gone, so resolve anyone still awaiting it rather than leaving them hung.
                 existing.CancelInFlight();
+#if BROADCASTER_MONITOR
+                MonitorUnregistered(existing, RegistrationChangeReason.Replaced);
+#endif
             }
 
             HandlerRegistration registration = new HandlerRegistration
@@ -1003,6 +1088,9 @@ namespace SideXP.Broadcaster
                 IsRequest = isRequest,
             };
             _handlers[type] = registration;
+#if BROADCASTER_MONITOR
+            MonitorRegistered(registration);
+#endif
             return new SubscriptionHandle(registration);
         }
 
@@ -1028,6 +1116,9 @@ namespace SideXP.Broadcaster
                 Active = true,
             };
             list.Add(registration);
+#if BROADCASTER_MONITOR
+            MonitorRegistered(registration);
+#endif
             return new SubscriptionHandle(registration);
         }
 
@@ -1140,12 +1231,15 @@ namespace SideXP.Broadcaster
         /// Marks a registration inactive and removes it (immediately when no dispatch is in progress), otherwise deferred until the
         /// outermost dispatch ends.
         /// </summary>
-        internal void Remove(Registration registration)
+        internal void Remove(Registration registration, RegistrationChangeReason reason)
         {
             if (registration == null || !registration.Active)
                 return;
 
             registration.Active = false;
+#if BROADCASTER_MONITOR
+            MonitorUnregistered(registration, reason);
+#endif
             // Never-hangs: resolve anyone still awaiting this registration now that it's gone.
             registration.CancelInFlight();
             if (_dispatchDepth > 0)
