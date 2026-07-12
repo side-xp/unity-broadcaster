@@ -15,6 +15,12 @@ namespace SideXP.Broadcaster
         /// </summary>
         public string Description { get; set; }
 
+        /// <summary>
+        /// When true, the monitor captures only this event's type name, not its field/property values. Set it on events whose payload is
+        /// sensitive, huge, or expensive to stringify. Off by default (the full payload is captured).
+        /// </summary>
+        public bool OmitSnapshot { get; set; }
+
     }
 
 }
