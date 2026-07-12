@@ -59,16 +59,16 @@ namespace SideXP.Broadcaster
 
         #region Commands
 
-        /// <inheritdoc cref="EventBus.Obey{T}(object, Action{T})"/>
-        public static SubscriptionHandle Obey<T>(object owner, Action<T> handler) where T : ICommand
+        /// <inheritdoc cref="EventBus.Obey{T}(object, Action{T}, bool)"/>
+        public static SubscriptionHandle Obey<T>(object owner, Action<T> handler, bool replace = false) where T : ICommand
         {
-            return Default.Obey(owner, handler);
+            return Default.Obey(owner, handler, replace);
         }
 
-        /// <inheritdoc cref="EventBus.Obey{T, TResult}(object, Func{T, TResult})"/>
-        public static SubscriptionHandle Obey<T, TResult>(object owner, Func<T, TResult> handler) where T : ICommand<TResult>
+        /// <inheritdoc cref="EventBus.Obey{T, TResult}(object, Func{T, TResult}, bool)"/>
+        public static SubscriptionHandle Obey<T, TResult>(object owner, Func<T, TResult> handler, bool replace = false) where T : ICommand<TResult>
         {
-            return Default.Obey(owner, handler);
+            return Default.Obey(owner, handler, replace);
         }
 
         /// <inheritdoc cref="EventBus.Order{T}(T)"/>
@@ -88,10 +88,10 @@ namespace SideXP.Broadcaster
 
         #region Requests
 
-        /// <inheritdoc cref="EventBus.Answer{T, TResult}(object, Func{T, TResult})"/>
-        public static SubscriptionHandle Answer<T, TResult>(object owner, Func<T, TResult> handler) where T : IRequest<TResult>
+        /// <inheritdoc cref="EventBus.Answer{T, TResult}(object, Func{T, TResult}, bool)"/>
+        public static SubscriptionHandle Answer<T, TResult>(object owner, Func<T, TResult> handler, bool replace = false) where T : IRequest<TResult>
         {
-            return Default.Answer(owner, handler);
+            return Default.Answer(owner, handler, replace);
         }
 
         /// <inheritdoc cref="EventBus.Ask{TResult}(IRequest{TResult})"/>

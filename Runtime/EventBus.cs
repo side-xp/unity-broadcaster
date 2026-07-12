@@ -274,9 +274,11 @@ namespace SideXP.Broadcaster
         /// <typeparam name="T">The exact command type to handle.</typeparam>
         /// <param name="owner">The owner of this registration.</param>
         /// <param name="handler">Performs the action when the command is ordered.</param>
-        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists, returns an inactive handle
-        /// instead.</returns>
-        public SubscriptionHandle Obey<T>(object owner, Action<T> handler) where T : ICommand
+        /// <param name="replace">By default, if you try to add a handler while another one already exists, this call is ignored. If
+        /// enabled, this handler supersedes it (for an intentional hand-off, eg. across an additive scene load).</param>
+        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists and <paramref name="replace"/> is
+        /// <c>false</c>, returns an inactive handle instead.</returns>
+        public SubscriptionHandle Obey<T>(object owner, Action<T> handler, bool replace = false) where T : ICommand
         {
             if (owner == null)
                 throw new ArgumentNullException(nameof(owner));
@@ -284,7 +286,7 @@ namespace SideXP.Broadcaster
                 throw new ArgumentNullException(nameof(handler));
 
             MainThreadGuard.Assert();
-            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, handler);
+            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, handler, replace);
         }
 
         /// <summary>
@@ -295,9 +297,11 @@ namespace SideXP.Broadcaster
         /// <typeparam name="TResult">The outcome the action produces.</typeparam>
         /// <param name="owner">The owner of this registration.</param>
         /// <param name="handler">Performs the action and returns its outcome.</param>
-        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists, returns an inactive handle
-        /// instead.</returns>
-        public SubscriptionHandle Obey<T, TResult>(object owner, Func<T, TResult> handler) where T : ICommand<TResult>
+        /// <param name="replace">By default, if you try to add a handler while another one already exists, this call is ignored. If
+        /// enabled, this handler supersedes it (for an intentional hand-off, eg. across an additive scene load).</param>
+        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists and <paramref name="replace"/> is
+        /// <c>false</c>, returns an inactive handle instead.</returns>
+        public SubscriptionHandle Obey<T, TResult>(object owner, Func<T, TResult> handler, bool replace = false) where T : ICommand<TResult>
         {
             if (owner == null)
                 throw new ArgumentNullException(nameof(owner));
@@ -308,7 +312,7 @@ namespace SideXP.Broadcaster
             // Store an invoker typed on the interface so the interface-typed Order can call it back without knowing the concrete command
             // type (the cast unboxes the command the caller passed as ICommand<TResult>).
             Func<ICommand<TResult>, TResult> invoker = command => handler((T)command);
-            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, invoker);
+            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, invoker, replace);
         }
 
         /// <summary>
@@ -370,9 +374,11 @@ namespace SideXP.Broadcaster
         /// <typeparam name="TResult">The type of the answer.</typeparam>
         /// <param name="owner">The owner of this registration.</param>
         /// <param name="handler">Produces the answer. By convention it must not mutate state (asking is always safe).</param>
-        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists, returns an inactive handle
-        /// instead.</returns>
-        public SubscriptionHandle Answer<T, TResult>(object owner, Func<T, TResult> handler) where T : IRequest<TResult>
+        /// <param name="replace">By default, if you try to add a handler while another one already exists, this call is ignored. If
+        /// enabled, this handler supersedes it (for an intentional hand-off, eg. across an additive scene load).</param>
+        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists and <paramref name="replace"/> is
+        /// <c>false</c>, returns an inactive handle instead.</returns>
+        public SubscriptionHandle Answer<T, TResult>(object owner, Func<T, TResult> handler, bool replace = false) where T : IRequest<TResult>
         {
             if (owner == null)
                 throw new ArgumentNullException(nameof(owner));
@@ -382,7 +388,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             // Same interface-typed invoker trick as commands, so the interface-typed Ask can call back without the concrete request type.
             Func<IRequest<TResult>, TResult> invoker = request => handler((T)request);
-            return RegisterHandler(typeof(T), RegistrationRole.RequestHandler, owner, invoker);
+            return RegisterHandler(typeof(T), RegistrationRole.RequestHandler, owner, invoker, replace);
         }
 
         /// <summary>
@@ -552,16 +558,24 @@ namespace SideXP.Broadcaster
 
         /// <summary>
         /// Stores a command or request handler in the single-handler slot for its type, enforcing the exactly-one rule. If an active
-        /// handler already occupies the slot, logs a dev-build diagnostic and returns an inactive handle (the first stays authoritative).
+        /// handler already occupies the slot and <paramref name="replace"/> is <c>false</c>, logs a dev-build diagnostic and returns an
+        /// inactive handle (the first stays authoritative); with <paramref name="replace"/> <c>true</c>, the incumbent is superseded.
         /// </summary>
-        private SubscriptionHandle RegisterHandler(Type type, RegistrationRole role, object owner, Delegate callback)
+        private SubscriptionHandle RegisterHandler(Type type, RegistrationRole role, object owner, Delegate callback, bool replace)
         {
             if (_handlers.TryGetValue(type, out Registration existing) && existing.Active)
             {
+                if (!replace)
+                {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Debug.LogError($"[Broadcaster] A handler for '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored.", owner as UnityEngine.Object);
+                    Debug.LogError($"[Broadcaster] A handler for '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
 #endif
-                return default;
+                    return default;
+                }
+
+                // Supersede the incumbent: deactivate it so its handle and any pending removal become no-ops, then let the slot be
+                // overwritten below. The outgoing owner's later cleanup won't find it in the slot anymore.
+                existing.Active = false;
             }
 
             Registration registration = new Registration

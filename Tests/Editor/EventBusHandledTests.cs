@@ -168,6 +168,86 @@ namespace SideXP.Broadcaster.Tests
         #endregion
 
 
+        #region Handler replacement (hand-off)
+
+        [Test]
+        public void Obey_Replace_SupersedesExistingWithoutError()
+        {
+            EventBus bus = new EventBus();
+            object first = new object();
+            object second = new object();
+
+            bus.Obey<DoubleCommand, int>(first, command => command.Value * 2);
+            // No LogAssert.Expect: replace must NOT log the duplicate error (an unexpected log would fail the test).
+            SubscriptionHandle handle = bus.Obey<DoubleCommand, int>(second, command => command.Value * 10, replace: true);
+
+            Assert.IsTrue(handle.IsActive);
+            Assert.AreEqual(30, bus.Order(new DoubleCommand { Value = 3 }), "The replacing handler is now authoritative.");
+        }
+
+        [Test]
+        public void Answer_Replace_SupersedesExistingWithoutError()
+        {
+            EventBus bus = new EventBus();
+            object first = new object();
+            object second = new object();
+
+            bus.Answer<SumRequest, int>(first, request => request.A + request.B);
+            SubscriptionHandle handle = bus.Answer<SumRequest, int>(second, request => (request.A + request.B) * 100, replace: true);
+
+            Assert.IsTrue(handle.IsActive);
+            Assert.AreEqual(300, bus.Ask(new SumRequest { A = 1, B = 2 }), "The replacing answerer is now authoritative.");
+        }
+
+        [Test]
+        public void Obey_ReplaceWhenNoneExists_RegistersNormally()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+
+            SubscriptionHandle handle = bus.Obey<DoubleCommand, int>(owner, command => command.Value * 2, replace: true);
+
+            Assert.IsTrue(handle.IsActive);
+            Assert.AreEqual(8, bus.Order(new DoubleCommand { Value = 4 }));
+        }
+
+        [Test]
+        public void Obey_Replace_OldOwnerCleanupDoesNotRemoveNewHandler()
+        {
+            // The additive-scene hand-off: the incoming handler replaces the outgoing one while both owners are alive,
+            // then the outgoing owner is cleaned up. The new handler must survive.
+            EventBus bus = new EventBus();
+            object outgoing = new object();
+            object incoming = new object();
+
+            bus.Obey<DoubleCommand, int>(outgoing, command => command.Value * 2);
+            bus.Obey<DoubleCommand, int>(incoming, command => command.Value * 10, replace: true);
+
+            bus.UnsubscribeAll(outgoing); // outgoing scene unloads after the hand-off
+
+            Assert.AreEqual(30, bus.Order(new DoubleCommand { Value = 3 }), "The incoming handler must remain.");
+        }
+
+        [Test]
+        public void Obey_Replace_OldHandleBecomesInactive()
+        {
+            EventBus bus = new EventBus();
+            object first = new object();
+            object second = new object();
+
+            SubscriptionHandle firstHandle = bus.Obey<DoubleCommand, int>(first, command => command.Value * 2);
+            bus.Obey<DoubleCommand, int>(second, command => command.Value * 10, replace: true);
+
+            Assert.IsFalse(firstHandle.IsActive, "The superseded handler's handle reports inactive.");
+
+            // Disposing the stale handle must not disturb the current handler.
+            firstHandle.Dispose();
+            Assert.AreEqual(50, bus.Order(new DoubleCommand { Value = 5 }));
+        }
+
+        #endregion
+
+
         #region Exception propagation
 
         [Test]
