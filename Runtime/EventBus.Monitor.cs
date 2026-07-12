@@ -92,9 +92,45 @@ namespace SideXP.Broadcaster
         }
 
         /// <summary>
-        /// Closes a synchronous dispatch's span, restoring the parent as the current one.
+        /// Opens and immediately closes a span for a dispatch that finished synchronously with nothing to invoke (a cancelled cue, a cue
+        /// or order with no receiver). Handy where there is no callback loop to wrap.
+        /// </summary>
+        private void MonitorSyncDispatch<T>(EventKind kind, Type eventType, T payload, DispatchOutcome outcome)
+        {
+            DispatchSpan span = MonitorBeginDispatch(kind, eventType, payload);
+            MonitorEndDispatch(span, outcome);
+        }
+
+        /// <summary>
+        /// Closes a synchronous dispatch's span: restores the parent as the current one, then finishes the span.
         /// </summary>
         private void MonitorEndDispatch(DispatchSpan span, DispatchOutcome outcome)
+        {
+            if (span == null)
+                return;
+
+            MonitorRestoreAmbient(span);
+            MonitorCompleteDispatch(span, outcome);
+        }
+
+        /// <summary>
+        /// Restores a dispatch's parent as the current span, without finishing the span. An async dispatch (a cue, an async order/ask)
+        /// calls this once its synchronous start returns, so a later unrelated dispatch isn't mis-parented to a span that is still open but
+        /// no longer on the stack. Its own completion runs <see cref="MonitorCompleteDispatch"/> later.
+        /// </summary>
+        private void MonitorRestoreAmbient(DispatchSpan span)
+        {
+            if (span == null)
+                return;
+
+            _currentSpan = span.Parent;
+        }
+
+        /// <summary>
+        /// Finishes a span (sets its end fields and outcome, raises <c>OnSpanEnded</c>) without touching the current span. Used both by
+        /// the synchronous close and by an async dispatch resolving after its start returned.
+        /// </summary>
+        private void MonitorCompleteDispatch(DispatchSpan span, DispatchOutcome outcome)
         {
             if (span == null)
                 return;
@@ -103,7 +139,6 @@ namespace SideXP.Broadcaster
             span.EndTime = Time.realtimeSinceStartupAsDouble;
             span.Outcome = outcome;
             span.IsComplete = true;
-            _currentSpan = span.Parent;
             OnSpanEnded?.Invoke(span);
         }
 

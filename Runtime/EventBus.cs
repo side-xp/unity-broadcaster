@@ -794,10 +794,24 @@ namespace SideXP.Broadcaster
             EventTypeGuard.Assert<T>();
 
             if (cancellation.IsCancellationRequested)
+            {
+#if BROADCASTER_MONITOR
+                MonitorSyncDispatch(EventKind.Cue, typeof(T), cue, DispatchOutcome.Cancelled);
+#endif
                 return CanceledAwaitable();
+            }
 
             if (!_cuePerformers.TryGetValue(typeof(T), out List<PerformerRegistration> list) || list.Count == 0)
+            {
+#if BROADCASTER_MONITOR
+                MonitorSyncDispatch(EventKind.Cue, typeof(T), cue, DispatchOutcome.Completed);
+#endif
                 return CompletedAwaitable();
+            }
+
+#if BROADCASTER_MONITOR
+            DispatchSpan span = MonitorBeginDispatch(EventKind.Cue, typeof(T), cue);
+#endif
 
             AwaitableCompletionSource completion = new AwaitableCompletionSource();
             bool resolved = false;
@@ -815,9 +829,19 @@ namespace SideXP.Broadcaster
                 {
                     resolved = true;
                     if (cancellation.IsCancellationRequested)
+                    {
                         completion.TrySetCanceled();
+#if BROADCASTER_MONITOR
+                        MonitorCompleteDispatch(span, DispatchOutcome.Cancelled);
+#endif
+                    }
                     else
+                    {
                         completion.TrySetResult();
+#if BROADCASTER_MONITOR
+                        MonitorCompleteDispatch(span, DispatchOutcome.Completed);
+#endif
+                    }
                 }
             }
 
@@ -833,7 +857,14 @@ namespace SideXP.Broadcaster
                         continue;
 
                     outstanding++;
-                    StartCuePerformer(registration, cue, cancellation, OnPerformerDone);
+#if BROADCASTER_MONITOR
+                    ListenerSpan performerSpan = MonitorBeginListener(span, registration);
+#endif
+                    StartCuePerformer(registration, cue, cancellation, OnPerformerDone
+#if BROADCASTER_MONITOR
+                        , performerSpan
+#endif
+                        );
                 }
             }
             finally
@@ -842,6 +873,11 @@ namespace SideXP.Broadcaster
                 if (_dispatchDepth == 0)
                     RemovePendingRemovals();
             }
+
+#if BROADCASTER_MONITOR
+            // The synchronous start is over: restore the ambient span (the cue's span stays open until when-all completes).
+            MonitorRestoreAmbient(span);
+#endif
 
             // Release the starting guard: if every performer already finished (all instant, or none active), the cue resolves now.
             OnPerformerDone();
@@ -1127,31 +1163,53 @@ namespace SideXP.Broadcaster
         /// whether it completes, faults (isolated: logged, still counts as done), is cancelled by <paramref name="cancellation"/>, or is
         /// unregistered mid-cue. Dispatches on the performer's concrete delegate type.
         /// </summary>
-        private void StartCuePerformer<T>(PerformerRegistration registration, T cue, CancellationToken cancellation, Action onDone) where T : ICue
+        private void StartCuePerformer<T>(PerformerRegistration registration, T cue, CancellationToken cancellation, Action onDone
+#if BROADCASTER_MONITOR
+            , ListenerSpan listenerSpan
+#endif
+            ) where T : ICue
         {
             bool done = false;
             CancellationTokenRegistration tokenRegistration = default;
+#if BROADCASTER_MONITOR
+            // How this performer finished and its fault, if any: set by whichever terminal path fires, read when its sub-span closes.
+            DispatchOutcome outcome = DispatchOutcome.Completed;
+            Exception fault = null;
+#endif
 
             // Called on every terminal path (completion, fault, cancel, unregister); idempotent. Unhooks this performer's cancellation and
             // disposes its token registration, so every path cleans up exactly once.
             Action resolve = null;
+            // The cancellation-flavoured terminal that the fan-out token and a mid-cue unregister invoke: records the cancelled outcome,
+            // then funnels into the shared terminal above.
+            Action cancelResolve = null;
             resolve = () =>
             {
                 if (done)
                     return;
                 done = true;
-                registration.PendingCancellations?.Remove(resolve);
+                registration.PendingCancellations?.Remove(cancelResolve);
                 tokenRegistration.Dispose();
+#if BROADCASTER_MONITOR
+                MonitorEndListener(listenerSpan, outcome, fault);
+#endif
                 onDone();
             };
+            cancelResolve = () =>
+            {
+#if BROADCASTER_MONITOR
+                outcome = DispatchOutcome.Cancelled;
+#endif
+                resolve();
+            };
 
-            // Never-hangs: unregistering this performer mid-cue fires resolve, so the cue's when-all doesn't wait on a gone performer.
-            (registration.PendingCancellations ??= new List<Action>()).Add(resolve);
+            // Never-hangs: unregistering this performer mid-cue fires cancelResolve, so the cue's when-all doesn't wait on a gone performer.
+            (registration.PendingCancellations ??= new List<Action>()).Add(cancelResolve);
             // Cancellation fan-out: the cue's token resolves this performer's slot too (the cue as a whole is cancelled at the send level).
-            tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(resolve) : default;
+            tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancelResolve) : default;
 
-            // Registering the token may have fired resolve synchronously (already-cancelled token), before the assignment above captured the
-            // registration — so dispose it here and don't start the performer.
+            // Registering the token may have fired cancelResolve synchronously (already-cancelled token), before the assignment above
+            // captured the registration — so dispose it here and don't start the performer.
             if (done)
             {
                 tokenRegistration.Dispose();
@@ -1169,6 +1227,10 @@ namespace SideXP.Broadcaster
                     catch (Exception exception)
                     {
                         Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+#if BROADCASTER_MONITOR
+                        outcome = DispatchOutcome.Faulted;
+                        fault = exception;
+#endif
                     }
                     resolve();
                     break;
@@ -1183,6 +1245,10 @@ namespace SideXP.Broadcaster
                     catch (Exception exception)
                     {
                         Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+#if BROADCASTER_MONITOR
+                        outcome = DispatchOutcome.Faulted;
+                        fault = exception;
+#endif
                         resolve();
                         break;
                     }
@@ -1199,6 +1265,10 @@ namespace SideXP.Broadcaster
                     {
                         // A throw during the synchronous stretch is isolated and completes the performer, exactly like the other shapes.
                         Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+#if BROADCASTER_MONITOR
+                        outcome = DispatchOutcome.Faulted;
+                        fault = exception;
+#endif
                         resolve();
                     }
                     // No resolve() on the happy path: completion is when the performer calls `done` (or is cancelled/unregistered).
@@ -1215,10 +1285,17 @@ namespace SideXP.Broadcaster
                 catch (OperationCanceledException)
                 {
                     // The performer honoured a cancellation; its slot still resolves so the cue's when-all proceeds.
+#if BROADCASTER_MONITOR
+                    outcome = DispatchOutcome.Cancelled;
+#endif
                 }
                 catch (Exception exception)
                 {
                     Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+#if BROADCASTER_MONITOR
+                    outcome = DispatchOutcome.Faulted;
+                    fault = exception;
+#endif
                 }
                 finally
                 {

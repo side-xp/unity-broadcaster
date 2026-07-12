@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 using NUnit.Framework;
 
@@ -325,6 +326,148 @@ namespace SideXP.Broadcaster.Tests
             Assert.AreEqual(RegistrationChangeReason.Replaced, recorder.Unregistered[0].Reason);
             Assert.AreSame(first, recorder.Unregistered[0].Owner, "The superseded provider is the one reported as replaced.");
             Assert.AreEqual(2, recorder.Registered.Count, "Both the original and the replacement are reported as registered.");
+        }
+
+        #endregion
+
+
+        #region Cue spans
+
+        [Test]
+        public void Cue_InstantPerformers_SpanWithSubSpans()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Perform<FlashCue>(owner, _ => { });
+            bus.Perform<FlashCue>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bus.Cue(new FlashCue { Value = 5 }).GetAwaiter().GetResult();
+
+            CollectionAssert.AreEqual(new[] { "span+", "listener+", "listener-", "listener+", "listener-", "span-" }, recorder.Sequence);
+
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(EventKind.Cue, span.Kind);
+            Assert.AreEqual(typeof(FlashCue), span.EventType);
+            Assert.AreEqual("5", ValueOf(span.Payload, nameof(FlashCue.Value)));
+            Assert.AreEqual(DispatchOutcome.Completed, span.Outcome);
+            Assert.AreEqual(2, span.Listeners.Count);
+            Assert.AreEqual(RegistrationRole.CuePerformer, span.Listeners[0].Role);
+            Assert.AreEqual(DispatchOutcome.Completed, span.Listeners[0].Outcome);
+        }
+
+        [Test]
+        public void Cue_ZeroPerformers_EmptyCompletedSpan()
+        {
+            EventBus bus = new EventBus();
+            Recorder recorder = new Recorder(bus);
+
+            bus.Cue(new FlashCue()).GetAwaiter().GetResult();
+
+            CollectionAssert.AreEqual(new[] { "span+", "span-" }, recorder.Sequence);
+            Assert.AreEqual(DispatchOutcome.Completed, recorder.SpansBegan[0].Outcome);
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count);
+        }
+
+        [Test]
+        public void Cue_AlreadyCancelled_CancelledSpanNoSubSpans()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            bus.Perform<FlashCue>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            bus.Cue(new FlashCue(), new CancellationToken(canceled: true));
+
+            CollectionAssert.AreEqual(new[] { "span+", "span-" }, recorder.Sequence);
+            Assert.AreEqual(DispatchOutcome.Cancelled, recorder.SpansBegan[0].Outcome);
+            Assert.AreEqual(0, recorder.SpansBegan[0].Listeners.Count, "An already-cancelled cue never starts its performers.");
+        }
+
+        [Test]
+        public void Cue_DurativePerformer_SubSpanAndSpanCloseWhenItFinishes()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource performer = new AwaitableCompletionSource();
+            bus.Perform<FlashCue>(owner, _ => performer.Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            Awaitable.Awaiter awaiter = bus.Cue(new FlashCue()).GetAwaiter();
+
+            // The performer's sub-span opened but neither it nor the cue's span has closed yet.
+            CollectionAssert.AreEqual(new[] { "span+", "listener+" }, recorder.Sequence);
+            Assert.IsFalse(recorder.SpansBegan[0].IsComplete);
+
+            performer.SetResult();
+            awaiter.GetResult();
+
+            CollectionAssert.AreEqual(new[] { "span+", "listener+", "listener-", "span-" }, recorder.Sequence);
+            Assert.AreEqual(DispatchOutcome.Completed, recorder.SpansBegan[0].Listeners[0].Outcome);
+            Assert.AreEqual(DispatchOutcome.Completed, recorder.SpansBegan[0].Outcome);
+        }
+
+        [Test]
+        public void Cue_InstantPerformerThrows_SubSpanFaultedCueCompleted()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            Action<FlashCue> throwing = _ => throw new InvalidOperationException("boom");
+            bus.Perform<FlashCue>(owner, throwing);
+            bus.Perform<FlashCue>(owner, _ => { });
+            Recorder recorder = new Recorder(bus);
+
+            LogAssert.Expect(LogType.Exception, new Regex("boom"));
+            bus.Cue(new FlashCue()).GetAwaiter().GetResult();
+
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(DispatchOutcome.Faulted, span.Listeners[0].Outcome);
+            Assert.AreEqual("boom", span.Listeners[0].Exception.Message);
+            Assert.AreEqual(DispatchOutcome.Completed, span.Listeners[1].Outcome, "The healthy performer still completes.");
+            Assert.AreEqual(DispatchOutcome.Completed, span.Outcome, "A faulting performer is isolated; the cue still completes.");
+        }
+
+        [Test]
+        public void Cue_CancelledDuringFlight_SubSpansAndSpanCancelled()
+        {
+            EventBus bus = new EventBus();
+            object owner = new object();
+            AwaitableCompletionSource first = new AwaitableCompletionSource();
+            AwaitableCompletionSource second = new AwaitableCompletionSource();
+            bus.Perform<FlashCue>(owner, _ => first.Awaitable);
+            bus.Perform<FlashCue>(owner, _ => second.Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            CancellationTokenSource cts = new CancellationTokenSource();
+            Awaitable.Awaiter awaiter = bus.Cue(new FlashCue(), cts.Token).GetAwaiter();
+            cts.Cancel();
+            Assert.Catch<OperationCanceledException>(() => awaiter.GetResult());
+
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(DispatchOutcome.Cancelled, span.Outcome);
+            Assert.AreEqual(DispatchOutcome.Cancelled, span.Listeners[0].Outcome);
+            Assert.AreEqual(DispatchOutcome.Cancelled, span.Listeners[1].Outcome, "The cancellation fans out to every in-flight performer's sub-span.");
+        }
+
+        [Test]
+        public void Cue_PerformerReleasedMidCue_SubSpanCancelledCueCompletes()
+        {
+            EventBus bus = new EventBus();
+            object fast = new object();
+            object slow = new object();
+            AwaitableCompletionSource never = new AwaitableCompletionSource();
+            bus.Perform<FlashCue>(fast, _ => { });
+            bus.Perform<FlashCue>(slow, _ => never.Awaitable);
+            Recorder recorder = new Recorder(bus);
+
+            Awaitable.Awaiter awaiter = bus.Cue(new FlashCue()).GetAwaiter();
+            bus.UnsubscribeAll(slow);
+            awaiter.GetResult();
+
+            DispatchSpan span = recorder.SpansBegan[0];
+            Assert.AreEqual(DispatchOutcome.Completed, span.Listeners[0].Outcome, "The instant performer completed.");
+            Assert.AreEqual(DispatchOutcome.Cancelled, span.Listeners[1].Outcome, "The released performer's sub-span resolves as cancelled.");
+            Assert.AreEqual(DispatchOutcome.Completed, span.Outcome, "The cue still completes on the rest (this drain wasn't a token cancellation).");
         }
 
         #endregion
