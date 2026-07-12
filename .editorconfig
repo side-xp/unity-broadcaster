@@ -288,6 +288,13 @@ dotnet_naming_rule.constant_should_be_pascalcase.severity = warning
 dotnet_naming_rule.constant_should_be_pascalcase.symbols = constant
 dotnet_naming_rule.constant_should_be_pascalcase.style = pascalcase
 
+# Non-public constants: PascalCase. Required intersection rule — a const is
+# implicitly static, so without this the more-specific non-public static-field
+# rule (s_camelCase) would win and demand an s_ prefix on constants.
+dotnet_naming_rule.non_public_constant_should_be_pascalcase.severity = warning
+dotnet_naming_rule.non_public_constant_should_be_pascalcase.symbols = non_public_constant
+dotnet_naming_rule.non_public_constant_should_be_pascalcase.style = pascalcase
+
 # Public static readonly fields: PascalCase
 dotnet_naming_rule.public_static_readonly_field_should_be_pascalcase.severity = warning
 dotnet_naming_rule.public_static_readonly_field_should_be_pascalcase.symbols = public_static_readonly_field
@@ -349,9 +356,13 @@ dotnet_naming_symbols.class__namespace__function__property.applicable_kinds = na
 dotnet_naming_symbols.class__namespace__function__property.applicable_accessibilities = *
 dotnet_naming_symbols.class__namespace__function__property.required_modifiers =
 
-dotnet_naming_symbols.constant.applicable_kinds = *
+dotnet_naming_symbols.constant.applicable_kinds = field, local
 dotnet_naming_symbols.constant.applicable_accessibilities = *
 dotnet_naming_symbols.constant.required_modifiers = const
+
+dotnet_naming_symbols.non_public_constant.applicable_kinds = field
+dotnet_naming_symbols.non_public_constant.applicable_accessibilities = internal, private, private_protected
+dotnet_naming_symbols.non_public_constant.required_modifiers = const
 
 dotnet_naming_symbols.public_static_readonly_field.applicable_kinds = field
 dotnet_naming_symbols.public_static_readonly_field.applicable_accessibilities = *
