@@ -24,7 +24,7 @@ namespace SideXP.Broadcaster
         /// <remarks>
         /// There's no inheritance dispatch: an event of type <c>MyEvent</c> is mechanically different than <c>MyEventBase</c>.
         /// </remarks>
-        private readonly Dictionary<Type, List<Registration>> _signalRegistrations = new Dictionary<Type, List<Registration>>();
+        private readonly Dictionary<Type, List<ListenerRegistration>> _signalRegistrations = new Dictionary<Type, List<ListenerRegistration>>();
 
         /// <summary>
         /// Number of dispatches (or bulk edits) currently iterating registration lists.<br/>
@@ -46,19 +46,19 @@ namespace SideXP.Broadcaster
         /// State providers, at most one per signal type. A provider answers "what is the current value of this signal?" so a listener
         /// subscribing with <c>init</c> can pull it immediately.
         /// </summary>
-        private readonly Dictionary<Type, Registration> _providers = new Dictionary<Type, Registration>();
+        private readonly Dictionary<Type, ProviderRegistration> _providers = new Dictionary<Type, ProviderRegistration>();
 
         /// <summary>
         /// Command and request handlers, at most one per event type. Both kinds share this single-handler store (a type is only ever a
         /// command <i>or</i> a request, never both), keyed by exact event type.
         /// </summary>
-        private readonly Dictionary<Type, Registration> _handlers = new Dictionary<Type, Registration>();
+        private readonly Dictionary<Type, HandlerRegistration> _handlers = new Dictionary<Type, HandlerRegistration>();
 
         /// <summary>
         /// Cue performers, keyed by exact cue type. Like signal listeners, a cue has 0..N performers held in a per-type list and invoked
         /// in registration order; unlike signals, a cue's send awaits every performer's completion (when-all).
         /// </summary>
-        private readonly Dictionary<Type, List<Registration>> _cuePerformers = new Dictionary<Type, List<Registration>>();
+        private readonly Dictionary<Type, List<PerformerRegistration>> _cuePerformers = new Dictionary<Type, List<PerformerRegistration>>();
 
         #endregion
 
@@ -77,7 +77,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
 
-            if (!_signalRegistrations.TryGetValue(typeof(T), out List<Registration> list))
+            if (!_signalRegistrations.TryGetValue(typeof(T), out List<ListenerRegistration> list))
                 return;
 
             _dispatchDepth++;
@@ -87,7 +87,7 @@ namespace SideXP.Broadcaster
                 int count = list.Count;
                 for (int i = 0; i < count; i++)
                 {
-                    Registration registration = list[i];
+                    ListenerRegistration registration = list[i];
                     // A registration removed during this dispatch is skipped rather than invoked.
                     if (!registration.Active)
                         continue;
@@ -133,16 +133,15 @@ namespace SideXP.Broadcaster
             EventTypeGuard.Assert<T>();
 
             Type type = typeof(T);
-            if (!_signalRegistrations.TryGetValue(type, out List<Registration> list))
+            if (!_signalRegistrations.TryGetValue(type, out List<ListenerRegistration> list))
             {
-                list = new List<Registration>();
+                list = new List<ListenerRegistration>();
                 _signalRegistrations[type] = list;
             }
 
-            Registration registration = new Registration
+            ListenerRegistration registration = new ListenerRegistration
             {
                 Bus = this,
-                Role = RegistrationRole.SignalListener,
                 EventType = type,
                 Owner = owner,
                 Callback = listener,
@@ -151,7 +150,7 @@ namespace SideXP.Broadcaster
             list.Add(registration);
 
             // Pull the current value from a live provider, if the caller opted in.
-            if (init && _providers.TryGetValue(type, out Registration provider) && provider.Active)
+            if (init && _providers.TryGetValue(type, out ProviderRegistration provider) && provider.Active)
             {
                 bool pulled = false;
                 T current = default;
@@ -200,10 +199,10 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
 
-            if (!_signalRegistrations.TryGetValue(typeof(T), out List<Registration> list))
+            if (!_signalRegistrations.TryGetValue(typeof(T), out List<ListenerRegistration> list))
                 return false;
 
-            foreach (Registration registration in list)
+            foreach (ListenerRegistration registration in list)
             {
                 if (registration.Active && registration.Callback.Equals(listener))
                 {
@@ -243,7 +242,7 @@ namespace SideXP.Broadcaster
             EventTypeGuard.Assert<T>();
 
             Type type = typeof(T);
-            if (_providers.TryGetValue(type, out Registration existing) && existing.Active)
+            if (_providers.TryGetValue(type, out ProviderRegistration existing) && existing.Active)
             {
                 if (!replace)
                 {
@@ -258,10 +257,9 @@ namespace SideXP.Broadcaster
                 existing.Active = false;
             }
 
-            Registration registration = new Registration
+            ProviderRegistration registration = new ProviderRegistration
             {
                 Bus = this,
-                Role = RegistrationRole.Provider,
                 EventType = type,
                 Owner = owner,
                 Callback = provider,
@@ -283,7 +281,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
 
-            if (_providers.TryGetValue(typeof(T), out Registration provider) && provider.Active)
+            if (_providers.TryGetValue(typeof(T), out ProviderRegistration provider) && provider.Active)
             {
                 current = ((Func<T>)provider.Callback).Invoke();
                 return true;
@@ -318,7 +316,7 @@ namespace SideXP.Broadcaster
 
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
-            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, handler, replace, async: false);
+            return RegisterHandler(typeof(T), owner, handler, replace, async: false, isRequest: false);
         }
 
         /// <summary>
@@ -337,7 +335,7 @@ namespace SideXP.Broadcaster
 
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
-            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, handler, replace, async: true);
+            return RegisterHandler(typeof(T), owner, handler, replace, async: true, isRequest: false);
         }
 
         /// <summary>
@@ -364,7 +362,7 @@ namespace SideXP.Broadcaster
             // Store an invoker typed on the interface so the interface-typed Order can call it back without knowing the concrete command
             // type (the cast unboxes the command the caller passed as ICommand<TResult>).
             Func<ICommand<TResult>, TResult> invoker = command => handler((T)command);
-            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, invoker, replace, async: false);
+            return RegisterHandler(typeof(T), owner, invoker, replace, async: false, isRequest: false);
         }
 
         /// <summary>
@@ -385,7 +383,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
             Func<ICommand<TResult>, Awaitable<TResult>> invoker = command => handler((T)command);
-            return RegisterHandler(typeof(T), RegistrationRole.CommandHandler, owner, invoker, replace, async: true);
+            return RegisterHandler(typeof(T), owner, invoker, replace, async: true, isRequest: false);
         }
 
         /// <summary>
@@ -400,7 +398,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
 
-            if (_handlers.TryGetValue(typeof(T), out Registration registration) && registration.Active)
+            if (_handlers.TryGetValue(typeof(T), out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                 {
@@ -437,7 +435,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             Type type = command.GetType();
-            if (_handlers.TryGetValue(type, out Registration registration) && registration.Active)
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                     throw new InvalidOperationException($"The handler for command '{type.Name}' is asynchronous and can't be run synchronously. Use OrderAsync.");
@@ -465,7 +463,7 @@ namespace SideXP.Broadcaster
             if (cancellation.IsCancellationRequested)
                 return CanceledAwaitable();
 
-            if (_handlers.TryGetValue(typeof(T), out Registration registration) && registration.Active)
+            if (_handlers.TryGetValue(typeof(T), out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                     return BridgeAwaitable(() => ((Func<T, Awaitable>)registration.Callback).Invoke(command), registration, cancellation);
@@ -507,7 +505,7 @@ namespace SideXP.Broadcaster
                 return CanceledAwaitable<TResult>();
 
             Type type = command.GetType();
-            if (_handlers.TryGetValue(type, out Registration registration) && registration.Active)
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                     return BridgeAwaitable(() => ((Func<ICommand<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(command), registration, cancellation);
@@ -554,7 +552,7 @@ namespace SideXP.Broadcaster
             EventTypeGuard.Assert<T>();
             // Same interface-typed invoker trick as commands, so the interface-typed Ask can call back without the concrete request type.
             Func<IRequest<TResult>, TResult> invoker = request => handler((T)request);
-            return RegisterHandler(typeof(T), RegistrationRole.RequestHandler, owner, invoker, replace, async: false);
+            return RegisterHandler(typeof(T), owner, invoker, replace, async: false, isRequest: true);
         }
 
         /// <summary>
@@ -575,7 +573,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
             Func<IRequest<TResult>, Awaitable<TResult>> invoker = request => handler((T)request);
-            return RegisterHandler(typeof(T), RegistrationRole.RequestHandler, owner, invoker, replace, async: true);
+            return RegisterHandler(typeof(T), owner, invoker, replace, async: true, isRequest: true);
         }
 
         /// <summary>
@@ -596,7 +594,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             Type type = request.GetType();
-            if (_handlers.TryGetValue(type, out Registration registration) && registration.Active)
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                     throw new InvalidOperationException($"The handler for request '{type.Name}' is asynchronous and can't be run synchronously. Use AskAsync.");
@@ -623,7 +621,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             Type type = request.GetType();
-            if (_handlers.TryGetValue(type, out Registration registration) && registration.Active)
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                 {
@@ -661,7 +659,7 @@ namespace SideXP.Broadcaster
                 return CanceledAwaitable<TResult>();
 
             Type type = request.GetType();
-            if (_handlers.TryGetValue(type, out Registration registration) && registration.Active)
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                     return BridgeAwaitable(() => ((Func<IRequest<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(request), registration, cancellation);
@@ -765,7 +763,7 @@ namespace SideXP.Broadcaster
             if (cancellation.IsCancellationRequested)
                 return CanceledAwaitable();
 
-            if (!_cuePerformers.TryGetValue(typeof(T), out List<Registration> list) || list.Count == 0)
+            if (!_cuePerformers.TryGetValue(typeof(T), out List<PerformerRegistration> list) || list.Count == 0)
                 return CompletedAwaitable();
 
             AwaitableCompletionSource completion = new AwaitableCompletionSource();
@@ -797,7 +795,7 @@ namespace SideXP.Broadcaster
                 int count = list.Count;
                 for (int i = 0; i < count; i++)
                 {
-                    Registration registration = list[i];
+                    PerformerRegistration registration = list[i];
                     if (!registration.Active)
                         continue;
 
@@ -838,7 +836,7 @@ namespace SideXP.Broadcaster
             // which resumes its awaiting caller synchronously — and that code may re-register on this bus, which would corrupt an
             // enumeration still walking the stores. No user-authored code can run during this collection pass.
             List<Registration> owned = new List<Registration>();
-            foreach (List<Registration> list in _signalRegistrations.Values)
+            foreach (List<ListenerRegistration> list in _signalRegistrations.Values)
             {
                 foreach (Registration registration in list)
                 {
@@ -847,7 +845,7 @@ namespace SideXP.Broadcaster
                 }
             }
 
-            foreach (List<Registration> list in _cuePerformers.Values)
+            foreach (List<PerformerRegistration> list in _cuePerformers.Values)
             {
                 foreach (Registration registration in list)
                 {
@@ -891,9 +889,9 @@ namespace SideXP.Broadcaster
             // Snapshot everything before touching anything: resolving the in-flight slots below resumes awaiting callers
             // synchronously, and those may re-register on this bus — the stores must not be under enumeration when that happens.
             List<Registration> all = new List<Registration>();
-            foreach (List<Registration> list in _signalRegistrations.Values)
+            foreach (List<ListenerRegistration> list in _signalRegistrations.Values)
                 all.AddRange(list);
-            foreach (List<Registration> list in _cuePerformers.Values)
+            foreach (List<PerformerRegistration> list in _cuePerformers.Values)
                 all.AddRange(list);
             all.AddRange(_providers.Values);
             all.AddRange(_handlers.Values);
@@ -912,7 +910,7 @@ namespace SideXP.Broadcaster
             // Resolve the in-flight slots last (cue performers mid-cue, handlers mid-order/ask), so any awaiting caller completes
             // rather than hanging. Anything the resumed code re-registers lands in the freshly emptied stores and is kept.
             foreach (Registration registration in all)
-                CancelInFlight(registration);
+                registration.CancelInFlight();
         }
 
         /// <summary>
@@ -930,13 +928,13 @@ namespace SideXP.Broadcaster
             // awaiting callers synchronously, and those must already see a bus without these registrations (they may freely
             // re-register — that lands in a fresh store entry, never the detached one). Deactivating first also makes any
             // dispatch in progress skip these registrations (the list objects it captured stay alive).
-            _signalRegistrations.TryGetValue(type, out List<Registration> listeners);
+            _signalRegistrations.TryGetValue(type, out List<ListenerRegistration> listeners);
             _signalRegistrations.Remove(type);
-            _cuePerformers.TryGetValue(type, out List<Registration> performers);
+            _cuePerformers.TryGetValue(type, out List<PerformerRegistration> performers);
             _cuePerformers.Remove(type);
-            _providers.TryGetValue(type, out Registration provider);
+            _providers.TryGetValue(type, out ProviderRegistration provider);
             _providers.Remove(type);
-            _handlers.TryGetValue(type, out Registration handler);
+            _handlers.TryGetValue(type, out HandlerRegistration handler);
             _handlers.Remove(type);
 
             if (listeners != null)
@@ -959,10 +957,10 @@ namespace SideXP.Broadcaster
             if (performers != null)
             {
                 foreach (Registration registration in performers)
-                    CancelInFlight(registration);
+                    registration.CancelInFlight();
             }
             if (handler != null)
-                CancelInFlight(handler);
+                handler.CancelInFlight();
         }
 
         #endregion
@@ -975,14 +973,14 @@ namespace SideXP.Broadcaster
         /// handler already occupies the slot and <paramref name="replace"/> is <c>false</c>, logs a dev-build diagnostic and returns an
         /// inactive handle (the first stays authoritative); with <paramref name="replace"/> <c>true</c>, the incumbent is superseded.
         /// </summary>
-        private SubscriptionHandle RegisterHandler(Type type, RegistrationRole role, object owner, Delegate callback, bool replace, bool async)
+        private SubscriptionHandle RegisterHandler(Type type, object owner, Delegate callback, bool replace, bool async, bool isRequest)
         {
-            if (_handlers.TryGetValue(type, out Registration existing) && existing.Active)
+            if (_handlers.TryGetValue(type, out HandlerRegistration existing) && existing.Active)
             {
                 if (!replace)
                 {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    Debug.LogError($"[Broadcaster] A handler for '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
+                    Debug.LogError($"[Broadcaster] A handler for {(isRequest ? "request" : "command")} '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
 #endif
                     return default;
                 }
@@ -991,18 +989,18 @@ namespace SideXP.Broadcaster
                 // overwritten below. The outgoing owner's later cleanup won't find it in the slot anymore.
                 existing.Active = false;
                 // The superseded handler is gone, so resolve anyone still awaiting it rather than leaving them hung.
-                CancelInFlight(existing);
+                existing.CancelInFlight();
             }
 
-            Registration registration = new Registration
+            HandlerRegistration registration = new HandlerRegistration
             {
                 Bus = this,
-                Role = role,
                 EventType = type,
                 Owner = owner,
                 Callback = callback,
                 Active = true,
                 Async = async,
+                IsRequest = isRequest,
             };
             _handlers[type] = registration;
             return new SubscriptionHandle(registration);
@@ -1015,16 +1013,15 @@ namespace SideXP.Broadcaster
         /// </summary>
         private SubscriptionHandle AddPerformer(Type type, object owner, Delegate callback)
         {
-            if (!_cuePerformers.TryGetValue(type, out List<Registration> list))
+            if (!_cuePerformers.TryGetValue(type, out List<PerformerRegistration> list))
             {
-                list = new List<Registration>();
+                list = new List<PerformerRegistration>();
                 _cuePerformers[type] = list;
             }
 
-            Registration registration = new Registration
+            PerformerRegistration registration = new PerformerRegistration
             {
                 Bus = this,
-                Role = RegistrationRole.CuePerformer,
                 EventType = type,
                 Owner = owner,
                 Callback = callback,
@@ -1039,7 +1036,7 @@ namespace SideXP.Broadcaster
         /// whether it completes, faults (isolated: logged, still counts as done), is cancelled by <paramref name="cancellation"/>, or is
         /// unregistered mid-cue. Dispatches on the performer's concrete delegate type.
         /// </summary>
-        private void StartCuePerformer<T>(Registration registration, T cue, CancellationToken cancellation, Action onDone) where T : ICue
+        private void StartCuePerformer<T>(PerformerRegistration registration, T cue, CancellationToken cancellation, Action onDone) where T : ICue
         {
             bool done = false;
             CancellationTokenRegistration tokenRegistration = default;
@@ -1149,8 +1146,8 @@ namespace SideXP.Broadcaster
                 return;
 
             registration.Active = false;
-            // Never-hangs: resolve anyone still awaiting this handler now that it's gone.
-            CancelInFlight(registration);
+            // Never-hangs: resolve anyone still awaiting this registration now that it's gone.
+            registration.CancelInFlight();
             if (_dispatchDepth > 0)
                 _pendingRemovals.Add(registration);
             else
@@ -1158,44 +1155,43 @@ namespace SideXP.Broadcaster
         }
 
         /// <summary>
-        /// Physically removes a registration from whichever store holds it (listener list or provider slot), dropping an
+        /// Physically removes a registration from its store — each concrete registration type maps to exactly one — dropping an
         /// emptied list entry.
         /// </summary>
         private void RemoveFromStore(Registration registration)
         {
-            if (registration.Role == RegistrationRole.Provider)
+            switch (registration)
             {
-                // Only drop the slot if it still points at this exact registration — a newer provider may have replaced
-                // it while this one was pending removal.
-                if (_providers.TryGetValue(registration.EventType, out Registration current) && current == registration)
-                    _providers.Remove(registration.EventType);
-                return;
-            }
+                case ListenerRegistration listener:
+                    if (_signalRegistrations.TryGetValue(listener.EventType, out List<ListenerRegistration> listeners))
+                    {
+                        listeners.Remove(listener);
+                        if (listeners.Count == 0)
+                            _signalRegistrations.Remove(listener.EventType);
+                    }
+                    break;
 
-            if (registration.Role == RegistrationRole.CommandHandler || registration.Role == RegistrationRole.RequestHandler)
-            {
-                // Same slot guard as providers: only drop it if this exact handler still occupies it.
-                if (_handlers.TryGetValue(registration.EventType, out Registration current) && current == registration)
-                    _handlers.Remove(registration.EventType);
-                return;
-            }
+                case ProviderRegistration provider:
+                    // Only drop the slot if it still points at this exact registration — a newer provider may have replaced
+                    // it while this one was pending removal.
+                    if (_providers.TryGetValue(provider.EventType, out ProviderRegistration currentProvider) && currentProvider == provider)
+                        _providers.Remove(provider.EventType);
+                    break;
 
-            if (registration.Role == RegistrationRole.CuePerformer)
-            {
-                if (_cuePerformers.TryGetValue(registration.EventType, out List<Registration> performers))
-                {
-                    performers.Remove(registration);
-                    if (performers.Count == 0)
-                        _cuePerformers.Remove(registration.EventType);
-                }
-                return;
-            }
+                case HandlerRegistration handler:
+                    // Same slot guard as providers: only drop it if this exact handler still occupies it.
+                    if (_handlers.TryGetValue(handler.EventType, out HandlerRegistration currentHandler) && currentHandler == handler)
+                        _handlers.Remove(handler.EventType);
+                    break;
 
-            if (_signalRegistrations.TryGetValue(registration.EventType, out List<Registration> list))
-            {
-                list.Remove(registration);
-                if (list.Count == 0)
-                    _signalRegistrations.Remove(registration.EventType);
+                case PerformerRegistration performer:
+                    if (_cuePerformers.TryGetValue(performer.EventType, out List<PerformerRegistration> performers))
+                    {
+                        performers.Remove(performer);
+                        if (performers.Count == 0)
+                            _cuePerformers.Remove(performer.EventType);
+                    }
+                    break;
             }
         }
 
@@ -1213,27 +1209,10 @@ namespace SideXP.Broadcaster
         }
 
         /// <summary>
-        /// Resolves (as cancelled) every async dispatch still awaiting this handler, called when the handler is unregistered mid-flight so
-        /// those callers don't hang. A no-op for handlers with nothing in flight and for non-handler roles.
-        /// </summary>
-        private static void CancelInFlight(Registration registration)
-        {
-            List<Action> pending = registration.PendingCancellations;
-            if (pending == null || pending.Count == 0)
-                return;
-
-            // Snapshot then clear: each callback also removes itself, so it must not mutate the list we're walking.
-            Action[] callbacks = pending.ToArray();
-            pending.Clear();
-            foreach (Action cancel in callbacks)
-                cancel();
-        }
-
-        /// <summary>
         /// Bridges a durative command handler's <see cref="Awaitable"/> into one the bus controls, so the caller's wait resolves on
         /// completion, on cancellation, on a handler fault, or on the handler being unregistered mid-flight — never hanging.
         /// </summary>
-        private Awaitable BridgeAwaitable(Func<Awaitable> invoke, Registration registration, CancellationToken cancellation)
+        private Awaitable BridgeAwaitable(Func<Awaitable> invoke, HandlerRegistration registration, CancellationToken cancellation)
         {
             AwaitableCompletionSource source = new AwaitableCompletionSource();
             bool resolved = false;
@@ -1317,7 +1296,7 @@ namespace SideXP.Broadcaster
         /// Bridges a durative command/request handler's <see cref="Awaitable{TResult}"/> into one the bus controls (see
         /// <see cref="BridgeAwaitable(Func{Awaitable}, Registration, CancellationToken)"/>), carrying the handler's result.
         /// </summary>
-        private Awaitable<TResult> BridgeAwaitable<TResult>(Func<Awaitable<TResult>> invoke, Registration registration, CancellationToken cancellation)
+        private Awaitable<TResult> BridgeAwaitable<TResult>(Func<Awaitable<TResult>> invoke, HandlerRegistration registration, CancellationToken cancellation)
         {
             AwaitableCompletionSource<TResult> source = new AwaitableCompletionSource<TResult>();
             bool resolved = false;
