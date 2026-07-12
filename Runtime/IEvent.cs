@@ -19,7 +19,7 @@ namespace SideXP.Broadcaster
 
     /// <summary>
     /// A Cue is a notification that "can take time". Orchestrators can wait for all the listeners to finish their job before it's
-    /// considered ended. It cna have 0 or more listeners.
+    /// considered ended. It can have 0 or more listeners.
     /// </summary>
     public interface ICue : IEvent { }
 
@@ -39,7 +39,7 @@ namespace SideXP.Broadcaster
     public interface ICommand<TResult> : IEvent { }
 
     /// <summary>
-    /// A Request is a way for any system to ask for information about another. It musst be answered by exactly one handler.<br/>
+    /// A Request is a way for any system to ask for information about another. It must be answered by exactly one handler.<br/>
     /// As a general rule, a Request must be side-effect free, and never change the state of an object.
     /// </summary>
     /// <typeparam name="TResult">The type of the answer.</typeparam>

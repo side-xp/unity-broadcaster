@@ -30,7 +30,7 @@ namespace SideXP.Broadcaster
         /// Number of dispatches (or bulk edits) currently iterating registration lists.<br/>
         /// If greater than zero, that means some loop is walking a list, so structural edits to that list are unsafe (they'd corrupt the
         /// iteration) and are deferred until the outermost operation finishes (which is the role of <see cref="_pendingRemovals"/>).<br/>
-        /// This value is a counter rather than a boolean flag because dispatches nest (a listener may emit from inside its callbac)k.
+        /// This value is a counter rather than a boolean flag because dispatches nest (a listener may emit from inside its callback).
         /// </summary>
         private int _dispatchDepth = 0;
 
