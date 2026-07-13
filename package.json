@@ -4,6 +4,9 @@
   "description": "Code-first, type-keyed event bus for decoupled communication in Unity games and packages.",
   "displayName": "SideXP - Broadcaster",
   "unity": "6000.0",
+  "dependencies": {
+    "com.side-xp.core": "1.3.1"
+  },
   "author": {
     "name": "Sideways Experiments",
     "email": "dev@side-xp.com",
