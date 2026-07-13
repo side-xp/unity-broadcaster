@@ -71,7 +71,7 @@ namespace SideXP.Broadcaster.EditorOnly
             if (!TryResolveKind(type, out EventKind kind, out Type resultType))
                 return false;
 
-            BroadcastAttribute attribute = type.GetCustomAttribute<BroadcastAttribute>(inherit: false);
+            EventAttribute attribute = type.GetCustomAttribute<EventAttribute>(inherit: false);
             entry = new EventEntry(type, kind, resultType, attribute?.Description, attribute != null && attribute.OmitSnapshot);
             return true;
         }

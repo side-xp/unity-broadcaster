@@ -403,7 +403,7 @@ namespace SideXP.Broadcaster.Tests
 
         private struct Empty { }
 
-        [Broadcast(OmitSnapshot = true)]
+        [Event(OmitSnapshot = true)]
         private struct Secret
         {
             public int Password;

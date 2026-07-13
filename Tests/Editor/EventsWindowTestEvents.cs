@@ -7,7 +7,7 @@ namespace SideXP.Broadcaster.Tests
     /// </summary>
 
     /// <summary>A signal carrying <c>[Broadcast]</c> metadata, to prove the catalog reads the description and opt-out.</summary>
-    [Broadcast(Description = "A described signal.", OmitSnapshot = true)]
+    [Event(Description = "A described signal.", OmitSnapshot = true)]
     internal struct DescribedSignal : ISignal
     {
         public int Value;
