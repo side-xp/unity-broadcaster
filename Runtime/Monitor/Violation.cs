@@ -1,8 +1,3 @@
-#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !BROADCASTER_MONITOR_OFF
-#define BROADCASTER_MONITOR
-#endif
-
-#if BROADCASTER_MONITOR
 using System;
 
 namespace SideXP.Broadcaster
@@ -32,7 +27,7 @@ namespace SideXP.Broadcaster
 
     /// <summary>
     /// The monitor's structured report of a bus misuse, handed to the <c>OnViolation</c> hook. Produced in the editor and development
-    /// builds only; stripped from release.
+    /// builds only; release builds never produce one.
     /// </summary>
     public readonly struct Violation
     {
@@ -75,4 +70,3 @@ namespace SideXP.Broadcaster
     }
 
 }
-#endif

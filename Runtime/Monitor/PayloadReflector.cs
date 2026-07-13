@@ -1,8 +1,3 @@
-#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !BROADCASTER_MONITOR_OFF
-#define BROADCASTER_MONITOR
-#endif
-
-#if BROADCASTER_MONITOR
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -358,4 +353,3 @@ namespace SideXP.Broadcaster
     }
 
 }
-#endif

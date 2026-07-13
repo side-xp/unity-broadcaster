@@ -1,8 +1,3 @@
-#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !BROADCASTER_MONITOR_OFF
-#define BROADCASTER_MONITOR
-#endif
-
-#if BROADCASTER_MONITOR
 using System.Collections.Generic;
 using System.Text;
 
@@ -16,7 +11,7 @@ namespace SideXP.Broadcaster
     /// <remarks>
     /// Field values are captured one level deep (a field that is itself a complex object is shown by its own <c>ToString()</c>, or just
     /// its type name), never expanded further. Strings, collections and long values are truncated to hard caps. Only produced in the
-    /// editor and development builds; stripped from release.
+    /// editor and development builds; release builds never produce one.
     /// </remarks>
     public sealed class PayloadSnapshot
     {
@@ -99,4 +94,3 @@ namespace SideXP.Broadcaster
     }
 
 }
-#endif

@@ -1,8 +1,3 @@
-#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !BROADCASTER_MONITOR_OFF
-#define BROADCASTER_MONITOR
-#endif
-
-#if BROADCASTER_MONITOR
 using System;
 using System.Collections.Generic;
 
@@ -16,7 +11,7 @@ namespace SideXP.Broadcaster
     /// </summary>
     /// <remarks>
     /// The same instance is handed to <c>SpanBegan</c> and later <c>SpanEnded</c>: a recorder can hold it and read the end fields once
-    /// <see cref="IsComplete"/> is set. Only produced in the editor and development builds; stripped from release.
+    /// <see cref="IsComplete"/> is set. Only produced in the editor and development builds; release builds never produce one.
     /// </remarks>
     public sealed class DispatchSpan
     {
@@ -87,7 +82,7 @@ namespace SideXP.Broadcaster
     /// <remarks>
     /// The same instance is handed to <c>ListenerBegan</c> and later <c>ListenerEnded</c>. A durative cue performer stays open until its
     /// work finishes, so its sub-span can end well after the dispatch's synchronous start. Only produced in the editor and development
-    /// builds; stripped from release.
+    /// builds; release builds never produce one.
     /// </remarks>
     public sealed class ListenerSpan
     {
@@ -134,4 +129,3 @@ namespace SideXP.Broadcaster
     }
 
 }
-#endif

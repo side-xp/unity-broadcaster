@@ -1,7 +1,3 @@
-#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !BROADCASTER_MONITOR_OFF
-#define BROADCASTER_MONITOR
-#endif
-
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -83,10 +79,9 @@ namespace SideXP.Broadcaster
 
             _signalRegistrations.TryGetValue(typeof(T), out List<ListenerRegistration> list);
 
-#if BROADCASTER_MONITOR
             // Record the emit even when nobody listens, so "nothing happened" is observable on the timeline.
-            DispatchSpan span = MonitorBeginDispatch(EventKind.Signal, typeof(T), signal);
-#endif
+            DispatchSpan span = null;
+            MonitorBeginDispatch(ref span, EventKind.Signal, typeof(T), signal);
 
             if (list != null)
             {
@@ -102,24 +97,19 @@ namespace SideXP.Broadcaster
                         if (!registration.Active)
                             continue;
 
-#if BROADCASTER_MONITOR
-                        ListenerSpan listenerSpan = MonitorBeginListener(span, registration);
-#endif
+                        ListenerSpan listenerSpan = null;
+                        MonitorBeginListener(ref listenerSpan, span, registration);
                         try
                         {
                             // Exact cast back to the concrete delegate type: the payload is never boxed on the hot path.
                             ((Action<T>)registration.Callback).Invoke(signal);
-#if BROADCASTER_MONITOR
                             MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
-#endif
                         }
                         catch (Exception exception)
                         {
                             // Exception isolation: log with the owner as Unity context object, then carry on.
                             Debug.LogException(exception, registration.Owner as UnityEngine.Object);
-#if BROADCASTER_MONITOR
                             MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
-#endif
                         }
                     }
                 }
@@ -131,9 +121,7 @@ namespace SideXP.Broadcaster
                 }
             }
 
-#if BROADCASTER_MONITOR
             MonitorEndDispatch(span, DispatchOutcome.Completed);
-#endif
         }
 
         /// <summary>
@@ -172,9 +160,7 @@ namespace SideXP.Broadcaster
                 Active = true,
             };
             list.Add(registration);
-#if BROADCASTER_MONITOR
             MonitorRegistered(registration);
-#endif
 
             // Pull the current value from a live provider, if the caller opted in.
             if (init && _providers.TryGetValue(type, out ProviderRegistration provider) && provider.Active)
@@ -276,18 +262,14 @@ namespace SideXP.Broadcaster
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.LogError($"[Broadcaster] A provider for '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
 #endif
-#if BROADCASTER_MONITOR
                     MonitorViolation(ViolationKind.MultipleProviders, type, owner);
-#endif
                     return default;
                 }
 
                 // Supersede the incumbent: deactivate it so its handle and any pending removal become no-ops, then let the slot be
                 // overwritten below. The outgoing owner's later cleanup won't find it in the slot anymore.
                 existing.Active = false;
-#if BROADCASTER_MONITOR
                 MonitorUnregistered(existing, RegistrationChangeReason.Replaced);
-#endif
             }
 
             ProviderRegistration registration = new ProviderRegistration
@@ -299,9 +281,7 @@ namespace SideXP.Broadcaster
                 Active = true,
             };
             _providers[type] = registration;
-#if BROADCASTER_MONITOR
             MonitorRegistered(registration);
-#endif
             return new SubscriptionHandle(registration);
         }
 
@@ -434,9 +414,8 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
             EventTypeGuard.Assert<T>();
 
-#if BROADCASTER_MONITOR
-            DispatchSpan span = MonitorBeginDispatch(EventKind.Command, typeof(T), command);
-#endif
+            DispatchSpan span = null;
+            MonitorBeginDispatch(ref span, EventKind.Command, typeof(T), command);
 
             if (_handlers.TryGetValue(typeof(T), out HandlerRegistration registration) && registration.Active)
             {
@@ -445,28 +424,33 @@ namespace SideXP.Broadcaster
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.LogError($"[Broadcaster] The handler for command '{typeof(T).Name}' is asynchronous and can't be run synchronously. Use OrderAsync.");
 #endif
-#if BROADCASTER_MONITOR
                     MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, typeof(T), span);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
                     return false;
                 }
 
-#if BROADCASTER_MONITOR
-                MonitorInvokeHandlerVoid(span, registration, () => ((Action<T>)registration.Callback).Invoke(command));
-#else
-                ((Action<T>)registration.Callback).Invoke(command);
-#endif
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    ((Action<T>)registration.Callback).Invoke(command);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw;
+                }
                 return true;
             }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.LogError($"[Broadcaster] No handler is registered for command '{typeof(T).Name}'. The command was not performed.");
 #endif
-#if BROADCASTER_MONITOR
             MonitorDispatchViolation(ViolationKind.UnhandledCommand, typeof(T), span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
             return false;
         }
 
@@ -487,32 +471,37 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             Type type = command.GetType();
-#if BROADCASTER_MONITOR
-            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Command, type, command);
-#endif
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Command, type, command);
 
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                 {
-#if BROADCASTER_MONITOR
                     MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, type, span);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
                     throw new InvalidOperationException($"The handler for command '{type.Name}' is asynchronous and can't be run synchronously. Use OrderAsync.");
                 }
 
-#if BROADCASTER_MONITOR
-                return MonitorInvokeHandler(span, registration, () => ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command));
-#else
-                return ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command);
-#endif
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    TResult result = ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                    return result;
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw;
+                }
             }
 
-#if BROADCASTER_MONITOR
             MonitorDispatchViolation(ViolationKind.UnhandledCommand, type, span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
             throw new InvalidOperationException($"No handler is registered for command '{type.Name}', which must report a {typeof(TResult).Name}.");
         }
 
@@ -532,49 +521,37 @@ namespace SideXP.Broadcaster
 
             if (cancellation.IsCancellationRequested)
             {
-#if BROADCASTER_MONITOR
                 MonitorSyncDispatch(EventKind.Command, typeof(T), command, DispatchOutcome.Cancelled);
-#endif
                 return CanceledAwaitable();
             }
 
-#if BROADCASTER_MONITOR
-            DispatchSpan span = MonitorBeginDispatch(EventKind.Command, typeof(T), command);
-#endif
+            DispatchSpan span = null;
+            MonitorBeginDispatch(ref span, EventKind.Command, typeof(T), command);
 
             if (_handlers.TryGetValue(typeof(T), out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                 {
-#if BROADCASTER_MONITOR
                     // Async block: the span and its sub-span stay open until the bridged awaitable resolves.
                     Awaitable bridged = BridgeAwaitable(() => ((Func<T, Awaitable>)registration.Callback).Invoke(command), registration, cancellation, span);
                     MonitorRestoreAmbient(span);
                     return bridged;
-#else
-                    return BridgeAwaitable(() => ((Func<T, Awaitable>)registration.Callback).Invoke(command), registration, cancellation);
-#endif
                 }
 
                 // A sync handler through the async verb: run it now and hand back an already-completed (or faulted) awaitable.
-#if BROADCASTER_MONITOR
-                ListenerSpan listenerSpan = MonitorBeginListener(span, registration);
-#endif
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
                 try
                 {
                     ((Action<T>)registration.Callback).Invoke(command);
-#if BROADCASTER_MONITOR
                     MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
                     MonitorEndDispatch(span, DispatchOutcome.Completed);
-#endif
                     return CompletedAwaitable();
                 }
                 catch (Exception exception)
                 {
-#if BROADCASTER_MONITOR
                     MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
                     return FaultedAwaitable(exception);
                 }
             }
@@ -582,10 +559,8 @@ namespace SideXP.Broadcaster
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.LogError($"[Broadcaster] No handler is registered for command '{typeof(T).Name}'. The command was not performed.");
 #endif
-#if BROADCASTER_MONITOR
             MonitorDispatchViolation(ViolationKind.UnhandledCommand, typeof(T), span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
             return CompletedAwaitable();
         }
 
@@ -606,56 +581,43 @@ namespace SideXP.Broadcaster
 
             if (cancellation.IsCancellationRequested)
             {
-#if BROADCASTER_MONITOR
                 MonitorSyncDispatchBoxed(EventKind.Command, command.GetType(), command, DispatchOutcome.Cancelled);
-#endif
                 return CanceledAwaitable<TResult>();
             }
 
             Type type = command.GetType();
-#if BROADCASTER_MONITOR
-            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Command, type, command);
-#endif
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Command, type, command);
 
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                 {
-#if BROADCASTER_MONITOR
+                    // Async block: the span and its sub-span stay open until the bridged awaitable resolves.
                     Awaitable<TResult> bridged = BridgeAwaitable(() => ((Func<ICommand<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(command), registration, cancellation, span);
                     MonitorRestoreAmbient(span);
                     return bridged;
-#else
-                    return BridgeAwaitable(() => ((Func<ICommand<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(command), registration, cancellation);
-#endif
                 }
 
-#if BROADCASTER_MONITOR
-                ListenerSpan listenerSpan = MonitorBeginListener(span, registration);
-#endif
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
                 try
                 {
                     TResult result = ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command);
-#if BROADCASTER_MONITOR
                     MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
                     MonitorEndDispatch(span, DispatchOutcome.Completed);
-#endif
                     return CompletedAwaitable(result);
                 }
                 catch (Exception exception)
                 {
-#if BROADCASTER_MONITOR
                     MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
                     return FaultedAwaitable<TResult>(exception);
                 }
             }
 
-#if BROADCASTER_MONITOR
             MonitorDispatchViolation(ViolationKind.UnhandledCommand, type, span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
             return FaultedAwaitable<TResult>(new InvalidOperationException($"No handler is registered for command '{type.Name}', which must report a {typeof(TResult).Name}."));
         }
 
@@ -729,32 +691,37 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             Type type = request.GetType();
-#if BROADCASTER_MONITOR
-            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Request, type, request);
-#endif
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Request, type, request);
 
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                 {
-#if BROADCASTER_MONITOR
                     MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, type, span);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
                     throw new InvalidOperationException($"The handler for request '{type.Name}' is asynchronous and can't be run synchronously. Use AskAsync.");
                 }
 
-#if BROADCASTER_MONITOR
-                return MonitorInvokeHandler(span, registration, () => ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request));
-#else
-                return ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
-#endif
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    TResult result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                    return result;
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw;
+                }
             }
 
-#if BROADCASTER_MONITOR
             MonitorDispatchViolation(ViolationKind.UnansweredRequest, type, span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
             throw new InvalidOperationException($"No handler is registered to answer request '{type.Name}'.");
         }
 
@@ -774,9 +741,8 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             Type type = request.GetType();
-#if BROADCASTER_MONITOR
-            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Request, type, request);
-#endif
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Request, type, request);
 
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
@@ -785,26 +751,31 @@ namespace SideXP.Broadcaster
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.LogError($"[Broadcaster] The handler for request '{type.Name}' is asynchronous and can't be answered synchronously. Use AskAsync.");
 #endif
-#if BROADCASTER_MONITOR
                     MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, type, span);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
                     result = default;
                     return false;
                 }
 
-#if BROADCASTER_MONITOR
-                result = MonitorInvokeHandler(span, registration, () => ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request));
-#else
-                result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
-#endif
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw;
+                }
                 return true;
             }
 
-#if BROADCASTER_MONITOR
             // A tolerant miss is not a fault: the ask completed, nothing answered.
             MonitorEndDispatch(span, DispatchOutcome.Completed);
-#endif
             result = default;
             return false;
         }
@@ -826,56 +797,43 @@ namespace SideXP.Broadcaster
 
             if (cancellation.IsCancellationRequested)
             {
-#if BROADCASTER_MONITOR
                 MonitorSyncDispatchBoxed(EventKind.Request, request.GetType(), request, DispatchOutcome.Cancelled);
-#endif
                 return CanceledAwaitable<TResult>();
             }
 
             Type type = request.GetType();
-#if BROADCASTER_MONITOR
-            DispatchSpan span = MonitorBeginDispatchBoxed(EventKind.Request, type, request);
-#endif
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Request, type, request);
 
             if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
             {
                 if (registration.Async)
                 {
-#if BROADCASTER_MONITOR
+                    // Async block: the span and its sub-span stay open until the bridged awaitable resolves.
                     Awaitable<TResult> bridged = BridgeAwaitable(() => ((Func<IRequest<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(request), registration, cancellation, span);
                     MonitorRestoreAmbient(span);
                     return bridged;
-#else
-                    return BridgeAwaitable(() => ((Func<IRequest<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(request), registration, cancellation);
-#endif
                 }
 
-#if BROADCASTER_MONITOR
-                ListenerSpan listenerSpan = MonitorBeginListener(span, registration);
-#endif
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
                 try
                 {
                     TResult result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
-#if BROADCASTER_MONITOR
                     MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
                     MonitorEndDispatch(span, DispatchOutcome.Completed);
-#endif
                     return CompletedAwaitable(result);
                 }
                 catch (Exception exception)
                 {
-#if BROADCASTER_MONITOR
                     MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
                     MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
                     return FaultedAwaitable<TResult>(exception);
                 }
             }
 
-#if BROADCASTER_MONITOR
             MonitorDispatchViolation(ViolationKind.UnansweredRequest, type, span);
             MonitorEndDispatch(span, DispatchOutcome.Faulted);
-#endif
             return FaultedAwaitable<TResult>(new InvalidOperationException($"No handler is registered to answer request '{type.Name}'."));
         }
 
@@ -963,23 +921,18 @@ namespace SideXP.Broadcaster
 
             if (cancellation.IsCancellationRequested)
             {
-#if BROADCASTER_MONITOR
                 MonitorSyncDispatch(EventKind.Cue, typeof(T), cue, DispatchOutcome.Cancelled);
-#endif
                 return CanceledAwaitable();
             }
 
             if (!_cuePerformers.TryGetValue(typeof(T), out List<PerformerRegistration> list) || list.Count == 0)
             {
-#if BROADCASTER_MONITOR
                 MonitorSyncDispatch(EventKind.Cue, typeof(T), cue, DispatchOutcome.Completed);
-#endif
                 return CompletedAwaitable();
             }
 
-#if BROADCASTER_MONITOR
-            DispatchSpan span = MonitorBeginDispatch(EventKind.Cue, typeof(T), cue);
-#endif
+            DispatchSpan span = null;
+            MonitorBeginDispatch(ref span, EventKind.Cue, typeof(T), cue);
 
             AwaitableCompletionSource completion = new AwaitableCompletionSource();
             bool resolved = false;
@@ -988,7 +941,7 @@ namespace SideXP.Broadcaster
             // instant performer completing synchronously mid-loop can't resolve the cue before the later performers have even begun.
             // The cancellation fan-out is what each performer registers below; when the token fires it drains every in-flight slot, so the
             // cue resolves here. The last slot to drain decides completed vs cancelled by inspecting the token (a cancelled token means the
-            // drain was the fan-out, not natural completion — this also avoids depending on the order the token invokes its callbacks).
+            // drain was the fan-out, not natural completion, which also avoids depending on the order the token invokes its callbacks).
             int outstanding = 1;
             void OnPerformerDone()
             {
@@ -999,16 +952,12 @@ namespace SideXP.Broadcaster
                     if (cancellation.IsCancellationRequested)
                     {
                         completion.TrySetCanceled();
-#if BROADCASTER_MONITOR
                         MonitorCompleteDispatch(span, DispatchOutcome.Cancelled);
-#endif
                     }
                     else
                     {
                         completion.TrySetResult();
-#if BROADCASTER_MONITOR
                         MonitorCompleteDispatch(span, DispatchOutcome.Completed);
-#endif
                     }
                 }
             }
@@ -1025,14 +974,9 @@ namespace SideXP.Broadcaster
                         continue;
 
                     outstanding++;
-#if BROADCASTER_MONITOR
-                    ListenerSpan performerSpan = MonitorBeginListener(span, registration);
-#endif
-                    StartCuePerformer(registration, cue, cancellation, OnPerformerDone
-#if BROADCASTER_MONITOR
-                        , performerSpan
-#endif
-                        );
+                    ListenerSpan performerSpan = null;
+                    MonitorBeginListener(ref performerSpan, span, registration);
+                    StartCuePerformer(registration, cue, cancellation, OnPerformerDone, performerSpan);
                 }
             }
             finally
@@ -1042,10 +986,8 @@ namespace SideXP.Broadcaster
                     RemovePendingRemovals();
             }
 
-#if BROADCASTER_MONITOR
             // The synchronous start is over: restore the ambient span (the cue's span stays open until when-all completes).
             MonitorRestoreAmbient(span);
-#endif
 
             // Release the starting guard: if every performer already finished (all instant, or none active), the cue resolves now.
             OnPerformerDone();
@@ -1070,7 +1012,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             // Snapshot the owner's registrations before removing anything: removing one can resolve an in-flight async dispatch,
-            // which resumes its awaiting caller synchronously — and that code may re-register on this bus, which would corrupt an
+            // which resumes its awaiting caller synchronously (and that code may re-register on this bus), which would corrupt an
             // enumeration still walking the stores. No user-authored code can run during this collection pass.
             List<Registration> owned = new List<Registration>();
             foreach (List<ListenerRegistration> list in _signalRegistrations.Values)
@@ -1124,7 +1066,7 @@ namespace SideXP.Broadcaster
             MainThreadGuard.Assert();
 
             // Snapshot everything before touching anything: resolving the in-flight slots below resumes awaiting callers
-            // synchronously, and those may re-register on this bus — the stores must not be under enumeration when that happens.
+            // synchronously, and those may re-register on this bus. The stores must not be under enumeration when that happens.
             List<Registration> all = new List<Registration>();
             foreach (List<ListenerRegistration> list in _signalRegistrations.Values)
                 all.AddRange(list);
@@ -1134,19 +1076,12 @@ namespace SideXP.Broadcaster
             all.AddRange(_handlers.Values);
 
             // Deactivate first so any dispatch in progress skips the rest of its listeners (the list objects it captured stay
-            // alive), then empty the stores. Collect the ones that were still active so the monitor reports each exactly once
-            // (an already-inactive registration was reported when it was removed).
-#if BROADCASTER_MONITOR
-            List<Registration> cleared = new List<Registration>();
-#endif
+            // alive), then empty the stores. The monitor collects the ones that are still active beforehand, so it reports each
+            // exactly once (an already-inactive registration was reported when it was removed).
+            List<Registration> cleared = null;
+            MonitorCollectActive(all, ref cleared);
             foreach (Registration registration in all)
-            {
-#if BROADCASTER_MONITOR
-                if (registration.Active)
-                    cleared.Add(registration);
-#endif
                 registration.Active = false;
-            }
 
             _signalRegistrations.Clear();
             _cuePerformers.Clear();
@@ -1159,11 +1094,8 @@ namespace SideXP.Broadcaster
             foreach (Registration registration in all)
                 registration.CancelInFlight();
 
-#if BROADCASTER_MONITOR
             // Reported after the wipe, so a hook consumer that re-registers is kept (like a resumed caller), not wiped.
-            foreach (Registration registration in cleared)
-                MonitorUnregistered(registration, RegistrationChangeReason.Cleared);
-#endif
+            MonitorReportCleared(cleared);
         }
 
         /// <summary>
@@ -1177,10 +1109,10 @@ namespace SideXP.Broadcaster
 
             Type type = typeof(T);
 
-            // Detach and deactivate everything for the type first, and only then resolve the in-flight slots: resolving resumes
-            // awaiting callers synchronously, and those must already see a bus without these registrations (they may freely
-            // re-register — that lands in a fresh store entry, never the detached one). Deactivating first also makes any
-            // dispatch in progress skip these registrations (the list objects it captured stay alive).
+            // Detach and deactivate everything for the type first, and only then resolve the in-flight slots: resolving resumes awaiting
+            // callers synchronously, and those must already see a bus without these registrations (they may freely re-register, never the
+            // detached one). Deactivating first also makes any dispatch in progress skip these registrations (the list objects it captured
+            // stay alive).
             _signalRegistrations.TryGetValue(type, out List<ListenerRegistration> listeners);
             _signalRegistrations.Remove(type);
             _cuePerformers.TryGetValue(type, out List<PerformerRegistration> performers);
@@ -1190,47 +1122,28 @@ namespace SideXP.Broadcaster
             _handlers.TryGetValue(type, out HandlerRegistration handler);
             _handlers.Remove(type);
 
-#if BROADCASTER_MONITOR
-            List<Registration> cleared = new List<Registration>();
-#endif
+            // The monitor collects the still-active registrations before the wipe, so it reports each exactly once (an
+            // already-inactive registration was reported when it was removed).
+            List<Registration> cleared = null;
+            MonitorCollectActive(listeners, ref cleared);
+            MonitorCollectActive(performers, ref cleared);
+            MonitorCollectActive(provider, ref cleared);
+            MonitorCollectActive(handler, ref cleared);
+
             if (listeners != null)
             {
                 foreach (Registration registration in listeners)
-                {
-#if BROADCASTER_MONITOR
-                    if (registration.Active)
-                        cleared.Add(registration);
-#endif
                     registration.Active = false;
-                }
             }
             if (performers != null)
             {
                 foreach (Registration registration in performers)
-                {
-#if BROADCASTER_MONITOR
-                    if (registration.Active)
-                        cleared.Add(registration);
-#endif
                     registration.Active = false;
-                }
             }
             if (provider != null)
-            {
-#if BROADCASTER_MONITOR
-                if (provider.Active)
-                    cleared.Add(provider);
-#endif
                 provider.Active = false;
-            }
             if (handler != null)
-            {
-#if BROADCASTER_MONITOR
-                if (handler.Active)
-                    cleared.Add(handler);
-#endif
                 handler.Active = false;
-            }
 
             // Resolve any in-flight cue or async order/ask on the cleared registrations so awaiting callers complete rather than
             // hanging.
@@ -1242,11 +1155,8 @@ namespace SideXP.Broadcaster
             if (handler != null)
                 handler.CancelInFlight();
 
-#if BROADCASTER_MONITOR
             // Reported after the wipe, so a hook consumer that re-registers is kept (like a resumed caller), not wiped.
-            foreach (Registration registration in cleared)
-                MonitorUnregistered(registration, RegistrationChangeReason.Cleared);
-#endif
+            MonitorReportCleared(cleared);
         }
 
         #endregion
@@ -1268,9 +1178,7 @@ namespace SideXP.Broadcaster
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.LogError($"[Broadcaster] A handler for {(isRequest ? "request" : "command")} '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
 #endif
-#if BROADCASTER_MONITOR
                     MonitorViolation(ViolationKind.MultipleHandlers, type, owner);
-#endif
                     return default;
                 }
 
@@ -1279,9 +1187,7 @@ namespace SideXP.Broadcaster
                 existing.Active = false;
                 // The superseded handler is gone, so resolve anyone still awaiting it rather than leaving them hung.
                 existing.CancelInFlight();
-#if BROADCASTER_MONITOR
                 MonitorUnregistered(existing, RegistrationChangeReason.Replaced);
-#endif
             }
 
             HandlerRegistration registration = new HandlerRegistration
@@ -1295,9 +1201,7 @@ namespace SideXP.Broadcaster
                 IsRequest = isRequest,
             };
             _handlers[type] = registration;
-#if BROADCASTER_MONITOR
             MonitorRegistered(registration);
-#endif
             return new SubscriptionHandle(registration);
         }
 
@@ -1323,30 +1227,22 @@ namespace SideXP.Broadcaster
                 Active = true,
             };
             list.Add(registration);
-#if BROADCASTER_MONITOR
             MonitorRegistered(registration);
-#endif
             return new SubscriptionHandle(registration);
         }
 
         /// <summary>
-        /// Starts one cue performer synchronously and arranges for <paramref name="onDone"/> to be called exactly once when it finishes —
+        /// Starts one cue performer synchronously and arranges for <paramref name="onDone"/> to be called exactly once when it finishes,
         /// whether it completes, faults (isolated: logged, still counts as done), is cancelled by <paramref name="cancellation"/>, or is
         /// unregistered mid-cue. Dispatches on the performer's concrete delegate type.
         /// </summary>
-        private void StartCuePerformer<T>(PerformerRegistration registration, T cue, CancellationToken cancellation, Action onDone
-#if BROADCASTER_MONITOR
-            , ListenerSpan listenerSpan
-#endif
-            ) where T : ICue
+        private void StartCuePerformer<T>(PerformerRegistration registration, T cue, CancellationToken cancellation, Action onDone, ListenerSpan listenerSpan) where T : ICue
         {
             bool done = false;
             CancellationTokenRegistration tokenRegistration = default;
-#if BROADCASTER_MONITOR
             // How this performer finished and its fault, if any: set by whichever terminal path fires, read when its sub-span closes.
             DispatchOutcome outcome = DispatchOutcome.Completed;
             Exception fault = null;
-#endif
 
             // Called on every terminal path (completion, fault, cancel, unregister); idempotent. Unhooks this performer's cancellation and
             // disposes its token registration, so every path cleans up exactly once.
@@ -1361,16 +1257,12 @@ namespace SideXP.Broadcaster
                 done = true;
                 registration.PendingCancellations?.Remove(cancelResolve);
                 tokenRegistration.Dispose();
-#if BROADCASTER_MONITOR
                 MonitorEndListener(listenerSpan, outcome, fault);
-#endif
                 onDone();
             };
             cancelResolve = () =>
             {
-#if BROADCASTER_MONITOR
                 outcome = DispatchOutcome.Cancelled;
-#endif
                 resolve();
             };
 
@@ -1380,7 +1272,7 @@ namespace SideXP.Broadcaster
             tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancelResolve) : default;
 
             // Registering the token may have fired cancelResolve synchronously (already-cancelled token), before the assignment above
-            // captured the registration — so dispose it here and don't start the performer.
+            // captured the registration (so dispose it here and don't start the performer).
             if (done)
             {
                 tokenRegistration.Dispose();
@@ -1398,10 +1290,8 @@ namespace SideXP.Broadcaster
                     catch (Exception exception)
                     {
                         Debug.LogException(exception, registration.Owner as UnityEngine.Object);
-#if BROADCASTER_MONITOR
                         outcome = DispatchOutcome.Faulted;
                         fault = exception;
-#endif
                     }
                     resolve();
                     break;
@@ -1416,10 +1306,8 @@ namespace SideXP.Broadcaster
                     catch (Exception exception)
                     {
                         Debug.LogException(exception, registration.Owner as UnityEngine.Object);
-#if BROADCASTER_MONITOR
                         outcome = DispatchOutcome.Faulted;
                         fault = exception;
-#endif
                         resolve();
                         break;
                     }
@@ -1436,10 +1324,8 @@ namespace SideXP.Broadcaster
                     {
                         // A throw during the synchronous stretch is isolated and completes the performer, exactly like the other shapes.
                         Debug.LogException(exception, registration.Owner as UnityEngine.Object);
-#if BROADCASTER_MONITOR
                         outcome = DispatchOutcome.Faulted;
                         fault = exception;
-#endif
                         resolve();
                     }
                     // No resolve() on the happy path: completion is when the performer calls `done` (or is cancelled/unregistered).
@@ -1456,17 +1342,13 @@ namespace SideXP.Broadcaster
                 catch (OperationCanceledException)
                 {
                     // The performer honoured a cancellation; its slot still resolves so the cue's when-all proceeds.
-#if BROADCASTER_MONITOR
                     outcome = DispatchOutcome.Cancelled;
-#endif
                 }
                 catch (Exception exception)
                 {
                     Debug.LogException(exception, registration.Owner as UnityEngine.Object);
-#if BROADCASTER_MONITOR
                     outcome = DispatchOutcome.Faulted;
                     fault = exception;
-#endif
                 }
                 finally
                 {
@@ -1485,9 +1367,7 @@ namespace SideXP.Broadcaster
                 return;
 
             registration.Active = false;
-#if BROADCASTER_MONITOR
             MonitorUnregistered(registration, reason);
-#endif
             // Never-hangs: resolve anyone still awaiting this registration now that it's gone.
             registration.CancelInFlight();
             if (_dispatchDepth > 0)
@@ -1497,8 +1377,8 @@ namespace SideXP.Broadcaster
         }
 
         /// <summary>
-        /// Physically removes a registration from its store — each concrete registration type maps to exactly one — dropping an
-        /// emptied list entry.
+        /// Physically removes a registration from its store (each concrete registration type maps to exactly one) dropping an emptied list
+        /// entry.
         /// </summary>
         private void RemoveFromStore(Registration registration)
         {
@@ -1514,8 +1394,8 @@ namespace SideXP.Broadcaster
                     break;
 
                 case ProviderRegistration provider:
-                    // Only drop the slot if it still points at this exact registration — a newer provider may have replaced
-                    // it while this one was pending removal.
+                    // Only drop the slot if it still points at this exact registration (a newer provider may have replaced it while this
+                    // one was pending removal.
                     if (_providers.TryGetValue(provider.EventType, out ProviderRegistration currentProvider) && currentProvider == provider)
                         _providers.Remove(provider.EventType);
                     break;
@@ -1552,21 +1432,15 @@ namespace SideXP.Broadcaster
 
         /// <summary>
         /// Bridges a durative command handler's <see cref="Awaitable"/> into one the bus controls, so the caller's wait resolves on
-        /// completion, on cancellation, on a handler fault, or on the handler being unregistered mid-flight — never hanging.
+        /// completion, on cancellation, on a handler fault, or on the handler being unregistered mid-flight (never hanging).
         /// </summary>
-        private Awaitable BridgeAwaitable(Func<Awaitable> invoke, HandlerRegistration registration, CancellationToken cancellation
-#if BROADCASTER_MONITOR
-            , DispatchSpan span
-#endif
-            )
+        private Awaitable BridgeAwaitable(Func<Awaitable> invoke, HandlerRegistration registration, CancellationToken cancellation, DispatchSpan span)
         {
             AwaitableCompletionSource source = new AwaitableCompletionSource();
             bool resolved = false;
             Action cancel = null;
             CancellationTokenRegistration tokenRegistration = default;
-#if BROADCASTER_MONITOR
             ListenerSpan listenerSpan = null;
-#endif
 
             // Every terminal path funnels through here so the caller's awaitable (and the monitor spans) settle exactly once and the
             // bus/token registrations are cleaned up.
@@ -1583,10 +1457,8 @@ namespace SideXP.Broadcaster
                 else
                     source.TrySetResult();
 
-#if BROADCASTER_MONITOR
                 MonitorEndListener(listenerSpan, outcome, exception);
                 MonitorCompleteDispatch(span, outcome);
-#endif
 
                 registration.PendingCancellations?.Remove(cancel);
                 tokenRegistration.Dispose();
@@ -1597,16 +1469,14 @@ namespace SideXP.Broadcaster
             (registration.PendingCancellations ??= new List<Action>()).Add(cancel);
             tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancel) : default;
 
-            // Registering may have fired cancel synchronously (token already cancelled) — don't invoke the handler if so.
+            // Registering may have fired cancel synchronously (token already cancelled).
             if (resolved)
             {
                 tokenRegistration.Dispose();
                 return source.Awaitable;
             }
 
-#if BROADCASTER_MONITOR
-            listenerSpan = MonitorBeginListener(span, registration);
-#endif
+            MonitorBeginListener(ref listenerSpan, span, registration);
 
             Awaitable inner;
             try
@@ -1642,21 +1512,15 @@ namespace SideXP.Broadcaster
 
         /// <summary>
         /// Bridges a durative command/request handler's <see cref="Awaitable{TResult}"/> into one the bus controls (see
-        /// <see cref="BridgeAwaitable(Func{Awaitable}, Registration, CancellationToken)"/>), carrying the handler's result.
+        /// <see cref="BridgeAwaitable(Func{Awaitable}, HandlerRegistration, CancellationToken, DispatchSpan)"/>), carrying the handler's result.
         /// </summary>
-        private Awaitable<TResult> BridgeAwaitable<TResult>(Func<Awaitable<TResult>> invoke, HandlerRegistration registration, CancellationToken cancellation
-#if BROADCASTER_MONITOR
-            , DispatchSpan span
-#endif
-            )
+        private Awaitable<TResult> BridgeAwaitable<TResult>(Func<Awaitable<TResult>> invoke, HandlerRegistration registration, CancellationToken cancellation, DispatchSpan span)
         {
             AwaitableCompletionSource<TResult> source = new AwaitableCompletionSource<TResult>();
             bool resolved = false;
             Action cancel = null;
             CancellationTokenRegistration tokenRegistration = default;
-#if BROADCASTER_MONITOR
             ListenerSpan listenerSpan = null;
-#endif
 
             // Every terminal path funnels through here (see the void overload) so the source and the monitor spans settle once.
             void Resolve(DispatchOutcome outcome, Exception exception, TResult result)
@@ -1672,10 +1536,8 @@ namespace SideXP.Broadcaster
                 else
                     source.TrySetResult(result);
 
-#if BROADCASTER_MONITOR
                 MonitorEndListener(listenerSpan, outcome, exception);
                 MonitorCompleteDispatch(span, outcome);
-#endif
 
                 registration.PendingCancellations?.Remove(cancel);
                 tokenRegistration.Dispose();
@@ -1691,9 +1553,7 @@ namespace SideXP.Broadcaster
                 return source.Awaitable;
             }
 
-#if BROADCASTER_MONITOR
-            listenerSpan = MonitorBeginListener(span, registration);
-#endif
+            MonitorBeginListener(ref listenerSpan, span, registration);
 
             Awaitable<TResult> inner;
             try

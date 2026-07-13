@@ -1,8 +1,3 @@
-#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !BROADCASTER_MONITOR_OFF
-#define BROADCASTER_MONITOR
-#endif
-
-#if BROADCASTER_MONITOR
 using System;
 
 namespace SideXP.Broadcaster
@@ -11,7 +6,7 @@ namespace SideXP.Broadcaster
     /// <summary>
     /// The monitor's description of a registration being added or removed, handed to the <c>Registered</c> and <c>Unregistered</c> hooks.
     /// </summary>
-    /// <remarks>Only produced in the editor and development builds; stripped from release.</remarks>
+    /// <remarks>Only produced in the editor and development builds; release builds never produce one.</remarks>
     public readonly struct RegistrationInfo
     {
 
@@ -47,4 +42,3 @@ namespace SideXP.Broadcaster
     }
 
 }
-#endif
