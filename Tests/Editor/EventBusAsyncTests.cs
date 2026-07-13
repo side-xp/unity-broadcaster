@@ -17,7 +17,7 @@ namespace SideXP.Broadcaster.Tests
     /// guarantee. Every test uses a fresh <see cref="EventBus"/>.
     /// <br/>
     /// These run in EditMode and stay synchronous by driving each handler's completion through a test-owned
-    /// <see cref="AwaitableCompletionSource{T}"/> — setting its result resumes the bus's bridge on the same call, and every
+    /// <see cref="AwaitableCompletionSource{T}"/>. Setting its result resumes the bus's bridge on the same call, and every
     /// resolution the bus itself owns (cancel, unregister, unhandled) completes synchronously too.
     /// </summary>
     public class EventBusAsyncTests

@@ -16,7 +16,7 @@ namespace SideXP.Broadcaster.Tests
     /// <summary>
     /// Tests for the payload snapshot reflector: which members it captures, how it stringifies each value shape (primitives, strings,
     /// Unity objects, collections, nested complex values, nulls), the hard truncation caps, the <c>ToString()</c> summary line, the
-    /// <c>[Broadcast(OmitSnapshot = true)]</c> opt-out, and its promise never to throw. Pure C# — no bus involved.
+    /// <c>[Broadcast(OmitSnapshot = true)]</c> opt-out, and its promise never to throw. Pure C#, no bus involved.
     /// </summary>
     public class PayloadReflectorTests
     {
@@ -175,7 +175,7 @@ namespace SideXP.Broadcaster.Tests
         {
             HasBareList value = new HasBareList { Points = new List<Bare> { new Bare { X = 1 }, new Bare { X = 2 } } };
             PayloadSnapshot snapshot = PayloadReflector.Capture(value);
-            // A collection element with no custom ToString renders by its type name only — capture stays one level deep.
+            // A collection element with no custom ToString renders by its type name only (capture stays one level deep).
             Assert.AreEqual("[{Bare}, {Bare}] (2)", ValueOf(snapshot, nameof(HasBareList.Points)));
         }
 

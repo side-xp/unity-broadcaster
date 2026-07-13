@@ -26,7 +26,7 @@ namespace SideXP.Broadcaster
             if (Cache<T>.IsConcrete)
                 return;
 
-            Debug.LogError($"[Broadcaster] '{typeof(T).Name}' is an interface or an abstract type: the bus dispatches on exact concrete types only, so no event is ever keyed on it and this call can't match anything. This usually means the type argument was inferred from a variable declared as the interface or base type — make the concrete event type flow to this call instead.");
+            Debug.LogError($"[Broadcaster] '{typeof(T).Name}' is an interface or an abstract type: the bus dispatches on exact concrete types only, so no event is ever keyed on it and this call can't match anything. This usually means the type argument was inferred from a variable declared as the interface or base type (make the concrete event type flow to this call instead).");
         }
 
         /// <summary>

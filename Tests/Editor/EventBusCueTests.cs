@@ -273,7 +273,7 @@ namespace SideXP.Broadcaster.Tests
             bus.UnsubscribeAll(slow); // the slow performer vanishes before completing
 
             Assert.IsTrue(awaiter.IsCompleted, "The cue resolves once the released performer's slot drains.");
-            awaiter.GetResult(); // completes (not cancelled — this drain wasn't a token cancellation)
+            awaiter.GetResult(); // completes (not cancelled, this drain wasn't a token cancellation)
         }
 
         [Test]
@@ -309,7 +309,7 @@ namespace SideXP.Broadcaster.Tests
         }
 
         // The three tests below pin the same regression for each bulk-removal path: resolving an in-flight cue resumes its
-        // awaiting caller synchronously, from inside the removal call — and that resumed code may re-register on the bus. This
+        // awaiting caller synchronously, from inside the removal call (and that resumed code may re-register on the bus). This
         // must never corrupt the removal (it used to throw "collection was modified" out of the caller's cleanup).
 
         [Test]

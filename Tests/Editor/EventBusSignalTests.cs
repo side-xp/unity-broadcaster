@@ -13,7 +13,7 @@ namespace SideXP.Broadcaster.Tests
     /// <summary>
     /// Signal-core tests: emit/subscribe round-trips, the dispatch guarantees (registration order, synchrony, exception
     /// isolation, re-entrancy, exact-type dispatch, delegate-equality removal), owner/handle cleanup, and per-instance
-    /// isolation. Every test uses a fresh <see cref="EventBus"/> — never the static façade.
+    /// isolation. Every test uses a fresh <see cref="EventBus"/>.
     /// </summary>
     public class EventBusSignalTests
     {
@@ -162,7 +162,7 @@ namespace SideXP.Broadcaster.Tests
 
             Assert.DoesNotThrow(() => bus.Emit(new PingSignal()));
             // Two full dispatches run over the same two listeners (the outer one, and the nested one it triggers), so
-            // each listener fires exactly twice — and neither iteration is corrupted by the other.
+            // each listener fires exactly twice, and neither iteration is corrupted by the other.
             Assert.AreEqual(2, outerRuns);
             Assert.AreEqual(2, innerRuns);
         }

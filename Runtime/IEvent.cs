@@ -3,8 +3,8 @@ namespace SideXP.Broadcaster
 
     /// <summary>
     /// Base marker for every event type handled by an <see cref="EventBus"/>.<br/>
-    /// An event <b>is</b> a C# type: the type is both the identity and the payload. Implement one of the four kind markers below — never
-    /// this one directly.
+    /// An event <b>is</b> a C# type: the type is both the identity and the payload. Implement one of the four kind markers below (never
+    /// this one directly).
     /// </summary>
     /// <remarks>
     /// The bus dispatches on the <b>exact</b> type only: emitting a derived type never reaches a listener registered for a base type.

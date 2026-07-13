@@ -260,8 +260,8 @@ namespace SideXP.Broadcaster.Tests
             Func<DoubleCommand, int> throwing = _ => throw new InvalidOperationException("boom");
             bus.Obey<DoubleCommand, int>(owner, throwing);
 
-            // A single handler has no "others" to isolate from, and a valued order must return something — so the fault
-            // surfaces to the caller rather than being swallowed like a signal listener's.
+            // A single handler has no "others" to isolate from, and a valued order must return something (so the fault
+            // surfaces to the caller rather than being swallowed like a signal listener's).
             Assert.Throws<InvalidOperationException>(() => bus.Order(new DoubleCommand { Value = 1 }));
         }
 
@@ -368,7 +368,7 @@ namespace SideXP.Broadcaster.Tests
             EventBus bus = new EventBus();
             object owner = new object();
 
-            // The null handler is typed so it binds one overload — the async twin makes a bare null ambiguous.
+            // The null handler is typed so it binds one overload (the async twin makes a bare null ambiguous).
             Assert.Throws<ArgumentNullException>(() => bus.Obey<MoveCommand>(null, _ => { }));
             Assert.Throws<ArgumentNullException>(() => bus.Obey<MoveCommand>(owner, (Action<MoveCommand>)null));
             Assert.Throws<ArgumentNullException>(() => bus.Obey<DoubleCommand, int>(null, command => command.Value));

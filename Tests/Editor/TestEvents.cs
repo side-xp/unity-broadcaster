@@ -2,7 +2,7 @@ namespace SideXP.Broadcaster.Tests
 {
 
     /// <summary>
-    /// Struct signal used across the signal tests — exercises the no-boxing struct-payload path.
+    /// Struct signal used across the signal tests, exercises the no-boxing struct-payload path.
     /// </summary>
     internal struct PingSignal : ISignal
     {
@@ -10,7 +10,7 @@ namespace SideXP.Broadcaster.Tests
     }
 
     /// <summary>
-    /// A second, unrelated struct signal — proves per-type isolation and cross-type cleanup.
+    /// A second, unrelated struct signal, proves per-type isolation and cross-type cleanup.
     /// </summary>
     internal struct PongSignal : ISignal
     {
@@ -42,7 +42,7 @@ namespace SideXP.Broadcaster.Tests
     }
 
     /// <summary>
-    /// A void command — has a handler that performs an action and acknowledges it, but reports no outcome.
+    /// A void command. Has a handler that performs an action and acknowledges it, but reports no outcome.
     /// </summary>
     internal struct MoveCommand : ICommand
     {
@@ -50,7 +50,7 @@ namespace SideXP.Broadcaster.Tests
     }
 
     /// <summary>
-    /// A valued command — its handler performs an action and reports the outcome (here, the doubled input). Sibling of
+    /// A valued command. Its handler performs an action and reports the outcome (here, the doubled input). Sibling of
     /// <see cref="ICommand"/>, never inheriting it, so overload resolution on <c>Order</c> stays unambiguous.
     /// </summary>
     internal struct DoubleCommand : ICommand<int>
@@ -59,7 +59,7 @@ namespace SideXP.Broadcaster.Tests
     }
 
     /// <summary>
-    /// A request — its single handler answers with a value derived from the payload (here, the sum) without mutating state.
+    /// A request. Its single handler answers with a value derived from the payload (here, the sum) without mutating state.
     /// </summary>
     internal struct SumRequest : IRequest<int>
     {
@@ -68,7 +68,7 @@ namespace SideXP.Broadcaster.Tests
     }
 
     /// <summary>
-    /// A cue — 0..N performers react to it (instant, durative, or callback-style) and a sender may await when they've all finished.
+    /// A cue. 0..N performers react to it (instant, durative, or callback-style) and a sender may await when they've all finished.
     /// </summary>
     internal struct FlashCue : ICue
     {
