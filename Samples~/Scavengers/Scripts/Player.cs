@@ -189,7 +189,7 @@ namespace SideXP.Broadcaster.Scavengers
         private void Restart()
         {
             //Load the last scene loaded, in this case Main, the only scene in the game.
-            Application.LoadLevel(Application.loadedLevel);
+            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
         }
 
 
