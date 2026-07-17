@@ -8,63 +8,74 @@ using UnityEngine.UI;
 
 namespace SideXP.Broadcaster.Scavengers
 {
+    /// <summary>
+    /// Represents a game instance, and handles the game flow.
+    /// </summary>
     public class GameManager : MonoBehaviour
     {
-        //Time to wait before starting level, int seconds.
-        public float levelStartDelay = 2f;
-        //Delay between each Player turn.
-        public float turnDelay = 0.1f;
-        //Starting value for Player food points.
-        public int playerFoodPoints = 100;
-        //Static instance of GameManager which allows it to be accessed by any other script.
+
+        /// <summary>Singleton instance of this manager.</summary>
         public static GameManager instance = null;
-        //Boolean to check if it's players turn, hidden in inspector but public.
+
+        [Header("Gameplay settings")]
+
+        [Tooltip("The initial amount of food on the player.")]
+        public int playerFoodPoints = 100;
+
+        [Header("Sequence")]
+
+        [Tooltip("The time (in seconds) before starting a level.")]
+        public float levelStartDelay = 2f;
+
+        [Tooltip("The delay (in seconds) between each player turn.")]
+        public float turnDelay = 0.1f;
+
+        /// <summary>Flag enabled if it's currently the player's turn.</summary>
         [HideInInspector] public bool playersTurn = true;
 
-        //Text to display current level number.
+        /// <summary>UI text for displaying the current level number.</summary>
         private Text levelText;
-        //Image to block out level as levels are being set up, background for levelText.
+        /// <summary>UI image to block out level during setup.</summary>
         private GameObject levelImage;
-        //Store a reference to our BoardManager which will set up the level.
+
         private BoardManager boardScript;
-        //Current level number, expressed in game as "Day 1".
-        private int level = 0;
-        //List of all Enemy units, used to issue them move commands.
         private List<Enemy> enemies;
-        //Boolean to check if enemies are moving.
+
+        /// <summary>Current level number.</summary>
+        private int level = 0;
+        /// <summary>Flag enabled if enemies are currently moving.</summary>
         private bool enemiesMoving;
-        //Boolean to check if we're setting up board, prevent Player from moving during setup.
+        /// <summary>Flag enabled during board setup.</summary>
         private bool doingSetup = true;
 
-
-        //Awake is always called before any Start functions
-        void Awake()
+        private void Awake()
         {
-            //Check if instance already exists
+            // Set singleton instance if applicable
             if (instance == null)
             {
-                //if not, set instance to this
                 instance = this;
             }
-
-
-            //If instance already exists and it's not this:
+            // Destroy this object if it's not the singleton instance
             else if (instance != this)
             {
-                //Then destroy this. This enforces our singleton pattern, meaning there can only ever be one instance of a GameManager.
                 Destroy(gameObject);
+                return;
             }
 
-
-            //Sets this to not be destroyed when reloading scene
             DontDestroyOnLoad(gameObject);
 
-            //Assign enemies to a new List of Enemy objects.
             enemies = new List<Enemy>();
-
-            //Get a component reference to the attached BoardManager script
             boardScript = GetComponent<BoardManager>();
             SceneManager.sceneLoaded += OnSceneLoaded;
+        }
+
+        private void Update()
+        {
+            // Cancel if it's the player's turn, if enemies are already moving, or if the board is still being set up
+            if (playersTurn || enemiesMoving || doingSetup)
+                return;
+
+            StartCoroutine(MoveEnemies());
         }
 
         private void OnDestroy()
@@ -72,116 +83,86 @@ namespace SideXP.Broadcaster.Scavengers
             SceneManager.sceneLoaded -= OnSceneLoaded;
         }
 
-        //This is called each time a scene is loaded.
-        void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        /// <summary>
+        /// Called when a scene is loaded.
+        /// </summary>
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
-            //Add one to our level number.
             level++;
-            //Call InitGame to initialize our level.
             InitGame();
         }
 
-        //Initializes the game for each level.
-        void InitGame()
+        /// <summary>
+        /// Initializes the game on each level.
+        /// </summary>
+        private void InitGame()
         {
-            //While doingSetup is true the player can't move, prevent player from moving while title card is up.
+            // Mark setup, cleared in HideLevelImage()
             doingSetup = true;
 
-            //Get a reference to our image LevelImage by finding it by name.
+            // Setup UI
             levelImage = GameObject.Find("iLevelImage");
-
-            //Get a reference to our text LevelText's text component by finding it by name and calling GetComponent.
             levelText = GameObject.Find("tLevelText").GetComponent<Text>();
-
-            //Set the text of levelText to the string "Day" and append the current level number.
             levelText.text = "Day " + level;
-
-            //Set levelImage to active blocking player's view of the game board during setup.
             levelImage.SetActive(true);
-
-            //Call the HideLevelImage function with a delay in seconds of levelStartDelay.
             Invoke("HideLevelImage", levelStartDelay);
 
-            //Clear any Enemy objects in our List to prepare for next level.
+            // Reset board
             enemies.Clear();
-
-            //Call the SetupScene function of the BoardManager script, pass it current level number.
             boardScript.SetupScene(level);
         }
 
-        //Hides black image used between levels
-        void HideLevelImage()
+        /// <summary>
+        /// Hides the black overlay once <see cref="levelStartDelay"/> has elapsed.
+        /// </summary>
+        private void HideLevelImage()
         {
-            //Disable the levelImage gameObject.
             levelImage.SetActive(false);
-
-            //Set doingSetup to false allowing player to move again.
             doingSetup = false;
         }
 
-        //Update is called every frame.
-        void Update()
-        {
-            //Check that playersTurn or enemiesMoving or doingSetup are not currently true.
-            if (playersTurn || enemiesMoving || doingSetup)
-
-                //If any of these are true, return and do not start MoveEnemies.
-                return;
-
-            //Start moving enemies.
-            StartCoroutine(MoveEnemies());
-        }
-
-        //Call this to add the passed in Enemy to the List of Enemy objects.
+        /// <summary>
+        /// Adds a given enemy instance to the list.
+        /// </summary>
         public void AddEnemyToList(Enemy script)
         {
-            //Add Enemy to List enemies.
             enemies.Add(script);
         }
 
 
-        //GameOver is called when the player reaches 0 food points
+        /// <summary>
+        /// Triggers the game over screen and disables this game manager.
+        /// </summary>
         public void GameOver()
         {
-            //Set levelText to display number of levels passed and game over message
             levelText.text = "After " + level + " days, you starved.";
-
-            //Enable black background image gameObject.
             levelImage.SetActive(true);
-
-            //Disable this GameManager.
             enabled = false;
         }
 
-        //Coroutine to move enemies in sequence.
-        IEnumerator MoveEnemies()
+        /// <summary>
+        /// Coroutine to move enemies in sequence.
+        /// </summary>
+        private IEnumerator MoveEnemies()
         {
-            //While enemiesMoving is true player is unable to move.
+            // Mark sequence started
             enemiesMoving = true;
 
-            //Wait for turnDelay seconds, defaults to .1 (100 ms).
             yield return new WaitForSeconds(turnDelay);
 
-            //If there are no enemies spawned (IE in first level):
+            // Apply simple delay if there's no enemy to move
             if (enemies.Count == 0)
-            {
-                //Wait for turnDelay seconds between moves, replaces delay caused by enemies moving when there are none.
                 yield return new WaitForSeconds(turnDelay);
-            }
 
-            //Loop through List of Enemy objects.
+            // For each enemy on the board, make it move and wait a short delay
             for (int i = 0; i < enemies.Count; i++)
             {
-                //Call the MoveEnemy function of Enemy at index i in the enemies List.
                 enemies[i].MoveEnemy();
-
-                //Wait for Enemy's moveTime before moving next Enemy, 
                 yield return new WaitForSeconds(enemies[i].moveTime);
             }
-            //Once Enemies are done moving, set playersTurn to true so player can move.
-            playersTurn = true;
 
-            //Enemies are done moving, set enemiesMoving to false.
+            // Clear sequence
+            playersTurn = true;
             enemiesMoving = false;
         }
     }

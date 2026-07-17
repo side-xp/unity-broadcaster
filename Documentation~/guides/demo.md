@@ -1,6 +1,6 @@
 # Broadcaster Demo
 
-The packages comes with a sample project that illustrates how to use the Broadcaster features in real situations.
+The package comes with a sample project that illustrates how to use the Broadcaster features in real situations.
 
 You can import it from the *Packages Manager* window:
 
@@ -13,7 +13,7 @@ This will install the sample files into your `Assets` folder.
 
 ## The game concept
 
-The game is a turn-based tile-bassed roguelike where the player must survive to incoming zombies.
+The game is a turn-based tile-based roguelike where the player must survive incoming zombies.
 
 In short:
 
@@ -22,7 +22,7 @@ In short:
 - Running out of food is game over
 - Enemies can also move after player turn, and attack the player if in range
 - Enemy hits decrease food
-- Move on a tile with food grants +10 food, soda grats +20 food
+- Move on a tile with food grants +10 food, soda grants +20 food
 - Enemies can't be defeated, and will increase in number as the player progresses
 - Reach the *Exit* panel to go to the next level
 

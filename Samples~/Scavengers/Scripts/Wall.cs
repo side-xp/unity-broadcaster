@@ -3,43 +3,42 @@ using UnityEngine;
 
 namespace SideXP.Broadcaster.Scavengers
 {
+    /// <summary>
+    /// Represents a destructible wall.
+    /// </summary>
     public class Wall : MonoBehaviour
     {
-        //1 of 2 audio clips that play when the wall is attacked by the player.
-        public AudioClip chopSound1;
-        //2 of 2 audio clips that play when the wall is attacked by the player.
-        public AudioClip chopSound2;
-        //Alternate sprite to display after Wall has been attacked by player.
-        public Sprite dmgSprite;
-        //hit points for the wall.
+        [Header("Gameplay settings")]
+
         public int hp = 3;
 
+        [Header("Visuals")]
 
-        //Store a component reference to the attached SpriteRenderer.
+        public Sprite dmgSprite;
+
+        [Header("Audio")]
+
+        public AudioClip chopSound1;
+        public AudioClip chopSound2;
+
         private SpriteRenderer spriteRenderer;
 
         void Awake()
         {
-            //Get a component reference to the SpriteRenderer.
             spriteRenderer = GetComponent<SpriteRenderer>();
         }
 
-
-        //DamageWall is called when the player attacks a wall.
+        /// <summary>
+        /// Inflicts damage on this wall, and disables it if it has no remaining <see cref="hp"/>.
+        /// </summary>
         public void DamageWall(int loss)
         {
-            //Call the RandomizeSfx function of SoundManager to play one of two chop sounds.
             SoundManager.instance.RandomizeSfx(chopSound1, chopSound2);
 
-            //Set spriteRenderer to the damaged wall sprite.
             spriteRenderer.sprite = dmgSprite;
-
-            //Subtract loss from hit point total.
             hp -= loss;
 
-            //If hit points are less than or equal to zero:
             if (hp <= 0)
-                //Disable the gameObject.
                 gameObject.SetActive(false);
         }
     }
