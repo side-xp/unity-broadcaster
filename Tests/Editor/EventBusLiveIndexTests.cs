@@ -67,7 +67,7 @@ namespace SideXP.Broadcaster.Tests
         }
 
         [Test]
-        public void Performers_CountThenClearedByUnsubscribeAll()
+        public void Performers_CountThenClearedByUnregisterAll()
         {
             EventBus bus = new EventBus();
             EventBusLiveIndex index = new EventBusLiveIndex();
@@ -80,7 +80,7 @@ namespace SideXP.Broadcaster.Tests
             index.TryGet(typeof(FlashCue), out EventLiveState two);
             Assert.AreEqual(2, two.Performers);
 
-            bus.UnsubscribeAll(owner);
+            bus.UnregisterAll(owner);
             index.TryGet(typeof(FlashCue), out EventLiveState none);
             Assert.AreEqual(0, none.Performers);
         }

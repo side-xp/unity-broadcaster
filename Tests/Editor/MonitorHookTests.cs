@@ -295,7 +295,7 @@ namespace SideXP.Broadcaster.Tests
             bus.Subscribe<PingSignal>(owner, _ => { });
             Recorder recorder = new Recorder(bus);
 
-            bus.UnsubscribeAll(owner);
+            bus.UnregisterAll(owner);
 
             Assert.AreEqual(RegistrationChangeReason.RemovedByOwner, recorder.Unregistered[0].Reason);
         }
@@ -463,7 +463,7 @@ namespace SideXP.Broadcaster.Tests
             Recorder recorder = new Recorder(bus);
 
             Awaitable.Awaiter awaiter = bus.Cue(new FlashCue()).GetAwaiter();
-            bus.UnsubscribeAll(slow);
+            bus.UnregisterAll(slow);
             awaiter.GetResult();
 
             DispatchSpan span = recorder.SpansBegan[0];
@@ -980,7 +980,7 @@ namespace SideXP.Broadcaster.Tests
                 if (!unsubscribed)
                 {
                     unsubscribed = true;
-                    bus.UnsubscribeAll(owner);
+                    bus.UnregisterAll(owner);
                 }
             };
 

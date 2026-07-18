@@ -270,7 +270,7 @@ namespace SideXP.Broadcaster.Tests
             Assert.IsTrue(fastRan);
             Assert.IsFalse(awaiter.IsCompleted, "The slow performer is still in flight.");
 
-            bus.UnsubscribeAll(slow); // the slow performer vanishes before completing
+            bus.UnregisterAll(slow); // the slow performer vanishes before completing
 
             Assert.IsTrue(awaiter.IsCompleted, "The cue resolves once the released performer's slot drains.");
             awaiter.GetResult(); // completes (not cancelled, this drain wasn't a token cancellation)
@@ -328,7 +328,7 @@ namespace SideXP.Broadcaster.Tests
                 reRegistered = true;
             });
 
-            Assert.DoesNotThrow(() => bus.UnsubscribeAll(owner));
+            Assert.DoesNotThrow(() => bus.UnregisterAll(owner));
             Assert.IsTrue(reRegistered, "The resumed caller ran, and its registration went through.");
         }
 
@@ -382,7 +382,7 @@ namespace SideXP.Broadcaster.Tests
             bool ran = false;
             bus.Perform<FlashCue>(owner, _ => ran = true);
 
-            Assert.AreEqual(1, bus.UnsubscribeAll(owner));
+            Assert.AreEqual(1, bus.UnregisterAll(owner));
 
             bus.Cue(new FlashCue()).GetAwaiter().GetResult();
             Assert.IsFalse(ran, "A removed performer is not invoked.");

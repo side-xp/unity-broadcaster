@@ -69,7 +69,7 @@ namespace SideXP.Broadcaster.Scavengers
 
         private void OnDisable()
         {
-            Broadcaster.UnsubscribeAll(this);
+            Broadcaster.UnregisterAll(this);
         }
 
         private void OnPlayerMoved(PlayerMoved signal) => RandomizeSfx(moveSound1, moveSound2);

@@ -128,7 +128,7 @@ namespace SideXP.Broadcaster
         /// Registers a listener for a signal type.
         /// </summary>
         /// <typeparam name="T">The exact signal type to listen for.</typeparam>
-        /// <param name="owner">The owner of this registration (powers <see cref="UnsubscribeAll(object)"/> and diagnostics).</param>
+        /// <param name="owner">The owner of this registration (powers <see cref="UnregisterAll(object)"/> and diagnostics).</param>
         /// <param name="listener">The callback invoked on each emit.</param>
         /// <param name="init">If true and a provider for <typeparamref name="T"/> is alive, the listener is invoked
         /// immediately with that provider's current value (in addition to future emits). Does nothing if no provider is
@@ -1004,7 +1004,7 @@ namespace SideXP.Broadcaster
         /// </summary>
         /// <param name="owner">The owner whose registrations to remove (compared by reference).</param>
         /// <returns>The number of registrations removed.</returns>
-        public int UnsubscribeAll(object owner)
+        public int UnregisterAll(object owner)
         {
             if (owner == null)
                 return 0;
