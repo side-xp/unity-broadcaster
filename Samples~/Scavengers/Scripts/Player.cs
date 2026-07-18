@@ -28,12 +28,6 @@ namespace SideXP.Broadcaster.Scavengers
 
         public Text foodText;
 
-        [Header("Audio")]
-
-        public AudioClip moveSound1;
-        public AudioClip moveSound2;
-        public AudioClip gameOverSound;
-
         private Animator animator;
         private int food;
 
@@ -92,9 +86,9 @@ namespace SideXP.Broadcaster.Scavengers
             base.AttemptMove<T>(xDir, yDir);
 
             RaycastHit2D hit;
-            // Make the player move, play feedback if successful
+            // Make the player move, and emit a signal on success so the audio system can react
             if (Move(xDir, yDir, out hit))
-                SoundManager.instance.RandomizeSfx(moveSound1, moveSound2);
+                Broadcaster.Emit(new PlayerMoved());
 
             // Check for game over if the player lost its last food point this turn
             CheckIfGameOver();
@@ -125,7 +119,11 @@ namespace SideXP.Broadcaster.Scavengers
                 food += collectible.points;
                 foodText.text = "+" + collectible.points + " Food: " + food;
 
-                SoundManager.instance.RandomizeSfx(collectible.pickupSound1, collectible.pickupSound2);
+                // Emit what happened; the audio system decides how each kind of pickup sounds
+                if (collectible.kind == CollectibleKind.Food)
+                    Broadcaster.Emit(new PlayerAte());
+                else
+                    Broadcaster.Emit(new PlayerDrank());
 
                 // Disable the collectible once consumed
                 other.gameObject.SetActive(false);
@@ -158,8 +156,7 @@ namespace SideXP.Broadcaster.Scavengers
         {
             if (food <= 0)
             {
-                SoundManager.instance.PlaySingle(gameOverSound);
-                SoundManager.instance.musicSource.Stop();
+                Broadcaster.Emit(new PlayerDied());
                 GameManager.instance.GameOver();
             }
         }

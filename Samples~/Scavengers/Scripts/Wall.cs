@@ -16,11 +16,6 @@ namespace SideXP.Broadcaster.Scavengers
 
         public Sprite dmgSprite;
 
-        [Header("Audio")]
-
-        public AudioClip chopSound1;
-        public AudioClip chopSound2;
-
         private SpriteRenderer spriteRenderer;
 
         void Awake()
@@ -33,7 +28,7 @@ namespace SideXP.Broadcaster.Scavengers
         /// </summary>
         public void DamageWall(int loss)
         {
-            SoundManager.instance.RandomizeSfx(chopSound1, chopSound2);
+            Broadcaster.Emit(new WallChopped());
 
             spriteRenderer.sprite = dmgSprite;
             hp -= loss;

@@ -11,11 +11,6 @@ namespace SideXP.Broadcaster.Scavengers
         [Tooltip("The amount of damage dealt to the player when attacking. This is applied to the player's food count.")]
         public int playerDamage;
 
-        [Header("Audio")]
-
-        public AudioClip enemyAttack1;
-        public AudioClip enemyAttack2;
-
         private Animator animator;
         private Transform target;
         /// <summary>Defines if the enemy should skip this turn.</summary>
@@ -77,7 +72,7 @@ namespace SideXP.Broadcaster.Scavengers
             hitPlayer.LoseFood(playerDamage);
             // Play feedback
             animator.SetTrigger("attack");
-            SoundManager.instance.RandomizeSfx(enemyAttack1, enemyAttack2);
+            Broadcaster.Emit(new EnemyAttacked());
         }
     }
 }

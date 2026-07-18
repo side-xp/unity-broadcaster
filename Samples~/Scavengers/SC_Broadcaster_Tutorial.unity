@@ -154,6 +154,17 @@ MonoBehaviour:
   musicSource: {fileID: 266447241}
   lowPitchRange: 0.95
   highPitchRange: 1.05
+  moveSound1: {fileID: 8300000, guid: 892962212a4b74d1c9f578a3b6ea6439, type: 3}
+  moveSound2: {fileID: 8300000, guid: a826bc3d758db43d6ae9caf415b63d1d, type: 3}
+  eatSound1: {fileID: 8300000, guid: 1cb61f83d60374c7389bb547431919e3, type: 3}
+  eatSound2: {fileID: 8300000, guid: 062161c1897a54088a5430f8c197e1b8, type: 3}
+  drinkSound1: {fileID: 8300000, guid: b6b608537288246c9a464915db27bf52, type: 3}
+  drinkSound2: {fileID: 8300000, guid: bcb9dda73ee914d3e8f252895f73f461, type: 3}
+  chopSound1: {fileID: 8300000, guid: 4c2332bc8245b474dad63074059bb755, type: 3}
+  chopSound2: {fileID: 8300000, guid: f6aaac83be9e0493493aace800b76619, type: 3}
+  enemyAttackSound1: {fileID: 8300000, guid: 0db8cac2749584a009540aa5671ee80d, type: 3}
+  enemyAttackSound2: {fileID: 8300000, guid: 114514a3b3697484ebaa08f7fbf842d3, type: 3}
+  gameOverSound: {fileID: 8300000, guid: e2beefeb2273f4efe992adf5b8d67c29, type: 3}
 --- !u!82 &266447241
 AudioSource:
   m_ObjectHideFlags: 0

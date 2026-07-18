@@ -9,17 +9,21 @@ PrefabInstance:
     m_TransformParent: {fileID: 0}
     m_Modifications:
     - target: {fileID: -1147751292542242207, guid: 41786014bdf33ca49a60eaec1d2c76e6, type: 3}
+      propertyPath: kind
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -1147751292542242207, guid: 41786014bdf33ca49a60eaec1d2c76e6, type: 3}
       propertyPath: points
       value: 10
       objectReference: {fileID: 0}
     - target: {fileID: -1147751292542242207, guid: 41786014bdf33ca49a60eaec1d2c76e6, type: 3}
       propertyPath: pickupSound1
       value: 
-      objectReference: {fileID: 8300000, guid: bcb9dda73ee914d3e8f252895f73f461, type: 3}
+      objectReference: {fileID: 8300000, guid: 1cb61f83d60374c7389bb547431919e3, type: 3}
     - target: {fileID: -1147751292542242207, guid: 41786014bdf33ca49a60eaec1d2c76e6, type: 3}
       propertyPath: pickupSound2
       value: 
-      objectReference: {fileID: 8300000, guid: 1cb61f83d60374c7389bb547431919e3, type: 3}
+      objectReference: {fileID: 8300000, guid: 062161c1897a54088a5430f8c197e1b8, type: 3}
     - target: {fileID: 2428844267243322614, guid: 41786014bdf33ca49a60eaec1d2c76e6, type: 3}
       propertyPath: m_LocalPosition.x
       value: 0
