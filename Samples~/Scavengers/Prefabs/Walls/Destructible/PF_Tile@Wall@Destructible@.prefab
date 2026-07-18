@@ -54,11 +54,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 3520275301190961878, guid: 2402405efc6b1bb4c95c4a577d088d8a, type: 3}
       propertyPath: m_SortingLayer
-      value: 2
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 3520275301190961878, guid: 2402405efc6b1bb4c95c4a577d088d8a, type: 3}
-      propertyPath: m_SortingLayerID
-      value: 1182828427
+      propertyPath: m_SortingOrder
+      value: 50
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -85,7 +85,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2f84e35b82656de469d01273261a9622, type: 3}
   m_Name: 
   m_EditorClassIdentifier: SideXP.Unity.Broadcaster.Scavengers::SideXP.Broadcaster.Scavengers.Wall
+  hp: 3
+  dmgSprite: {fileID: 1003631719, guid: e5c4c2cd4b275e74d9dcd3c4ad23b74f, type: 3}
   chopSound1: {fileID: 8300000, guid: 4c2332bc8245b474dad63074059bb755, type: 3}
   chopSound2: {fileID: 8300000, guid: f6aaac83be9e0493493aace800b76619, type: 3}
-  dmgSprite: {fileID: 1003631719, guid: e5c4c2cd4b275e74d9dcd3c4ad23b74f, type: 3}
-  hp: 3

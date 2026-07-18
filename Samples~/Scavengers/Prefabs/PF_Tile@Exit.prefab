@@ -62,11 +62,11 @@ PrefabInstance:
       objectReference: {fileID: -89374814, guid: e5c4c2cd4b275e74d9dcd3c4ad23b74f, type: 3}
     - target: {fileID: 3740310435102198920, guid: de0950071861ea44484c956f6d2ff191, type: 3}
       propertyPath: m_SortingLayer
-      value: 2
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 3740310435102198920, guid: de0950071861ea44484c956f6d2ff191, type: 3}
-      propertyPath: m_SortingLayerID
-      value: 1182828427
+      propertyPath: m_SortingOrder
+      value: 50
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -118,7 +118,7 @@ BoxCollider2D:
   m_Offset: {x: 0.5, y: 0.5}
   m_SpriteTilingProperty:
     border: {x: 0, y: 0, z: 0, w: 0}
-    pivot: {x: 0, y: 0}
+    pivot: {x: 0.5, y: 0.5}
     oldSize: {x: 1, y: 1}
     newSize: {x: 1, y: 1}
     adaptiveTilingThreshold: 0.5
