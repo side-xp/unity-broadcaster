@@ -71,6 +71,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 308918846270360583, guid: de0950071861ea44484c956f6d2ff191, type: 3}
       insertIndex: -1
       addedObject: {fileID: 9065826445974402206}
+    - targetCorrespondingSourceObject: {fileID: 308918846270360583, guid: de0950071861ea44484c956f6d2ff191, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: -1147751292542242207}
   m_SourcePrefab: {fileID: 100100000, guid: de0950071861ea44484c956f6d2ff191, type: 3}
 --- !u!1 &3380171466573057791 stripped
 GameObject:
@@ -123,3 +126,18 @@ BoxCollider2D:
   m_AutoTiling: 0
   m_Size: {x: 1, y: 1}
   m_EdgeRadius: 0
+--- !u!114 &-1147751292542242207
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3380171466573057791}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 373fb7ef15af2b8488acbb1643191ca1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: SideXP.Unity.Broadcaster.Scavengers::SideXP.Broadcaster.Scavengers.Collectible
+  points: 10
+  pickupSound1: {fileID: 8300000, guid: 1cb61f83d60374c7389bb547431919e3, type: 3}
+  pickupSound2: {fileID: 8300000, guid: 062161c1897a54088a5430f8c197e1b8, type: 3}

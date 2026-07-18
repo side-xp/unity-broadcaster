@@ -18,12 +18,6 @@ namespace SideXP.Broadcaster.Scavengers
 
         [Header("Gameplay settings")]
 
-        [Tooltip("The amount of food granted when picking up a Food collectible.")]
-        public int pointsPerFood = 10;
-
-        [Tooltip("The amount of food granted when picking up a Soda collectible.")]
-        public int pointsPerSoda = 20;
-
         [Tooltip("Defines the amount of damage the player inflicts on a wall when chopping it.")]
         public int wallDamage = 1;
 
@@ -38,10 +32,6 @@ namespace SideXP.Broadcaster.Scavengers
 
         public AudioClip moveSound1;
         public AudioClip moveSound2;
-        public AudioClip eatSound1;
-        public AudioClip eatSound2;
-        public AudioClip drinkSound1;
-        public AudioClip drinkSound2;
         public AudioClip gameOverSound;
 
         private Animator animator;
@@ -123,32 +113,21 @@ namespace SideXP.Broadcaster.Scavengers
 
         private void OnTriggerEnter2D(Collider2D other)
         {
-            // If the hit object is the Exit panel, trigger next level
-            if (other.tag == "Exit")
+            // If the hit object is the Exit, trigger next level
+            if (other.GetComponent<Exit>() != null)
             {
                 Invoke("Restart", restartLevelDelay);
                 enabled = false;
             }
-            // Else, if the hit object is a Food collectible, get the defined amount of food
-            else if (other.tag == "Food")
+            // Else, if the hit object is a collectible, get its defined amount of food
+            else if (other.TryGetComponent(out Collectible collectible))
             {
-                food += pointsPerFood;
-                foodText.text = "+" + pointsPerFood + " Food: " + food;
+                food += collectible.points;
+                foodText.text = "+" + collectible.points + " Food: " + food;
 
-                SoundManager.instance.RandomizeSfx(eatSound1, eatSound2);
+                SoundManager.instance.RandomizeSfx(collectible.pickupSound1, collectible.pickupSound2);
 
-                // Disable the food object once consumed
-                other.gameObject.SetActive(false);
-            }
-            // Else, if the hit object is a Soda collectible, get the defined amount of food
-            else if (other.tag == "Soda")
-            {
-                food += pointsPerSoda;
-                foodText.text = "+" + pointsPerSoda + " Food: " + food;
-
-                SoundManager.instance.RandomizeSfx(drinkSound1, drinkSound2);
-
-                // Disable the soda object once consumed
+                // Disable the collectible once consumed
                 other.gameObject.SetActive(false);
             }
         }

@@ -12,10 +12,6 @@ PrefabInstance:
       propertyPath: m_Name
       value: PF_Tile@Exit
       objectReference: {fileID: 0}
-    - target: {fileID: 308918846270360583, guid: de0950071861ea44484c956f6d2ff191, type: 3}
-      propertyPath: m_TagString
-      value: Exit
-      objectReference: {fileID: 0}
     - target: {fileID: 798743494686014990, guid: de0950071861ea44484c956f6d2ff191, type: 3}
       propertyPath: m_LocalPosition.x
       value: 0
@@ -75,6 +71,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 308918846270360583, guid: de0950071861ea44484c956f6d2ff191, type: 3}
       insertIndex: -1
       addedObject: {fileID: -6967479653053303942}
+    - targetCorrespondingSourceObject: {fileID: 308918846270360583, guid: de0950071861ea44484c956f6d2ff191, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 935000068499737587}
   m_SourcePrefab: {fileID: 100100000, guid: de0950071861ea44484c956f6d2ff191, type: 3}
 --- !u!1 &8103938304498385156 stripped
 GameObject:
@@ -127,3 +126,15 @@ BoxCollider2D:
   m_AutoTiling: 0
   m_Size: {x: 1, y: 1}
   m_EdgeRadius: 0
+--- !u!114 &935000068499737587
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8103938304498385156}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8b788f7ca54f0034b91de0e00a53b595, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: SideXP.Unity.Broadcaster.Scavengers::SideXP.Broadcaster.Scavengers.Exit

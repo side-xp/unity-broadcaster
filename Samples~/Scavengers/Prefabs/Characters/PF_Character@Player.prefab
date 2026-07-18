@@ -98,9 +98,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: SideXP.Unity.Broadcaster.Scavengers::SideXP.Broadcaster.Scavengers.Player
   moveTime: 0.1
-  blockingLayer:
-    serializedVersion: 2
-    m_Bits: 64
   restartLevelDelay: 1
   pointsPerFood: 10
   pointsPerSoda: 20

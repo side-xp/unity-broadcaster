@@ -12,10 +12,6 @@ PrefabInstance:
       propertyPath: m_Name
       value: PF_Tile@Wall
       objectReference: {fileID: 0}
-    - target: {fileID: 308918846270360583, guid: de0950071861ea44484c956f6d2ff191, type: 3}
-      propertyPath: m_Layer
-      value: 6
-      objectReference: {fileID: 0}
     - target: {fileID: 798743494686014990, guid: de0950071861ea44484c956f6d2ff191, type: 3}
       propertyPath: m_LocalPosition.x
       value: 0

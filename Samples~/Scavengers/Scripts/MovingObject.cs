@@ -12,9 +12,6 @@ namespace SideXP.Broadcaster.Scavengers
         [Tooltip("The time (in seconds) for an object to move.")]
         public float moveTime = 0.1f;
 
-        [Tooltip("Defines the layer on which collision will be checked.")]
-        public LayerMask blockingLayer;
-
         private BoxCollider2D boxCollider;
         private Rigidbody2D rb2D;
 
@@ -33,11 +30,17 @@ namespace SideXP.Broadcaster.Scavengers
             Vector2 start = transform.position;
             Vector2 end = start + new Vector2(xDir, yDir);
 
+            // Only solid tiles (walls, characters) can block a move; triggers (collectibles, the exit) are ignored.
+            ContactFilter2D filter = new ContactFilter2D { useTriggers = false };
+            RaycastHit2D[] hits = new RaycastHit2D[1];
+
             // Temporarily disable the collider to prevent the Linecast from hitting this object
             boxCollider.enabled = false;
             // Detect nearby tile
-            hit = Physics2D.Linecast(start, end, blockingLayer);
+            int count = Physics2D.Linecast(start, end, filter, hits);
             boxCollider.enabled = true;
+
+            hit = count > 0 ? hits[0] : default;
 
             // If the target position is free, move
             if (hit.transform == null)

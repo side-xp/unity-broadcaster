@@ -68,10 +68,6 @@ PrefabInstance:
       propertyPath: m_Name
       value: PF_Character@Enemy@
       objectReference: {fileID: 0}
-    - target: {fileID: 7441717531051951786, guid: 6574b60ca5dad9843aad57cd4b625916, type: 3}
-      propertyPath: m_TagString
-      value: Enemy
-      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -98,9 +94,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: SideXP.Unity.Broadcaster.Scavengers::SideXP.Broadcaster.Scavengers.Enemy
   moveTime: 0.1
-  blockingLayer:
-    serializedVersion: 2
-    m_Bits: 64
   playerDamage: 1
   enemyAttack1: {fileID: 8300000, guid: 0db8cac2749584a009540aa5671ee80d, type: 3}
   enemyAttack2: {fileID: 8300000, guid: 114514a3b3697484ebaa08f7fbf842d3, type: 3}
