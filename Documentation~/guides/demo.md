@@ -28,6 +28,8 @@ In short:
 
 The concept come from an [old Unity tutorial](https://learn.unity.com/course/intermediate-3d-game-development/unit/2d-roguelike-tutorial-legacy). We reused their scripts and assets, but reworked it with Broadcaster features.
 
+> For reference, and for comparison, the original scripts (before any integration of Broadcaster) are available in the `Original` folder of the sample project. We only reworked them so you don't need to setup anything for running the demo (eg. tags, layers, ...).
+
 ## @todo
 
 @todo Explain how the project was at its initial state, and how we replaced the code with Broadcaster features to fix the issues
