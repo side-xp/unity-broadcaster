@@ -2,19 +2,20 @@ using System;
 using System.Collections.Generic;
 
 using UnityEditor;
+using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
-using SideXP.Core.EditorOnly;
 using SideXP.Core;
+using SideXP.Core.EditorOnly;
 
 namespace SideXP.Broadcaster.EditorOnly
 {
 
     /// <summary>
-    /// Catalogs every event type in the project, grouped by kind and searchable, and lets you fire any of them at the default bus from an
-    /// expandable emit box.<br/>
-    /// In play mode each row also shows what's live for its type (listeners, performers, a provider, a handler's owner). It's a thin
-    /// renderer: the cataloging, drafting, firing and live tally all live in plain, tested classes.
+    /// Catalogs every event type in the project as a searchable tree (nested by each event's display-name path) paired with a details pane
+    /// that drafts and fires the selected event and shows what's live for it in play mode.<br/>
+    /// It's a thin renderer: the cataloging, tree building, drafting, firing and live tally all live in plain classes; this window only lays
+    /// them out and forwards to them.
     /// </summary>
     public class BroadcasterEventsWindow : EditorWindow
     {
@@ -24,31 +25,40 @@ namespace SideXP.Broadcaster.EditorOnly
         private const string WindowTitle = "Broadcaster Events";
         private const string MenuItem = EditorConstants.EditorWindowMenu + "/Broadcaster/Events";
 
-        // Width reserved on the right of each row for its live columns.
-        private const float LiveColumnsWidth = 220f;
+        private const float SplitterWidth = 4f;
+        private const float MinPaneWidth = 160f;
 
         [SerializeField]
         private string _search = string.Empty;
 
-        // When off (the default), events flagged with [Broadcast(Hidden = true)] — chiefly package test events — are left out, so the window
+        // When off (the default), events flagged with [Event(Hidden = true)] (chiefly package test events) are left out, so the window
         // shows only the events a project actually authors. The toolbar eye reveals them.
         [SerializeField]
         private bool _showHidden = false;
 
+        // Width of the tree pane; the details pane fills the rest. Persisted so the split you set survives reloads.
         [SerializeField]
-        private Vector2 _scroll = Vector2.zero;
+        private float _treeWidth = 280f;
 
-        // Persisted across domain reloads so expanded rows stay open; keyed by the type's assembly-qualified name.
+        // The tree's expansion, selection and scroll, serialized so they're restored across domain reloads and editor restarts.
         [SerializeField]
-        private List<string> _expanded = new List<string>();
+        private TreeViewState<int> _treeState;
 
         // Rebuilt on enable (and on demand): the catalog is only stale after a recompile, which reloads the domain and re-enables the window.
         private List<EventEntry> _catalog;
 
-        // Per-type emit-box state (a draft payload and the last fire result), created lazily when a row is first expanded.
+        // Per-type details state (a draft payload and the last fire result), created lazily when a type is first selected.
         private readonly Dictionary<Type, RowState> _rows = new Dictionary<Type, RowState>();
 
+        private EventTreeView _tree;
         private EventBusLiveIndex _live;
+
+        private Vector2 _detailScroll;
+        private bool _resizingSplitter;
+
+        // Snapshot of the last filter pass, for the tree pane's empty-state message.
+        private int _visibleCount;
+        private bool _onlyHiddenMatch;
 
         #endregion
 
@@ -67,9 +77,15 @@ namespace SideXP.Broadcaster.EditorOnly
         {
             _catalog = EventCatalog.Build();
 
+            if (_treeState == null)
+                _treeState = new TreeViewState<int>();
+
             _live = new EventBusLiveIndex();
             _live.Changed += Repaint;
             _live.Attach(Broadcaster.Default);
+
+            _tree = new EventTreeView(_treeState) { SelectionChangedCallback = Repaint, Live = _live };
+            RebuildTree();
 
             EditorApplication.playModeStateChanged += HandlePlayModeStateChange;
         }
@@ -100,57 +116,122 @@ namespace SideXP.Broadcaster.EditorOnly
         #endregion
 
 
-        #region UI
+        #region Layout
 
         private void OnGUI()
         {
-            DrawToolbar();
+            float toolbarHeight = Mathf.Max(EditorStyles.toolbar.fixedHeight, 18f);
+            using (new GUILayout.AreaScope(new Rect(0f, 0f, position.width, toolbarHeight)))
+                DrawToolbar();
 
-            List<EventEntry> filtered = EventCatalog.Filter(_catalog, _search, _showHidden);
-            List<KeyValuePair<EventKind, List<EventEntry>>> groups = EventCatalog.GroupByKind(filtered);
+            Rect body = new Rect(0f, toolbarHeight, position.width, position.height - toolbarHeight);
+            _treeWidth = Mathf.Clamp(_treeWidth, MinPaneWidth, Mathf.Max(MinPaneWidth, body.width - MinPaneWidth));
 
-            using (EditorGUILayout.ScrollViewScope scroll = new EditorGUILayout.ScrollViewScope(_scroll))
-            {
-                _scroll = scroll.scrollPosition;
+            Rect treeRect = new Rect(body.x, body.y, _treeWidth, body.height);
+            Rect splitterRect = new Rect(treeRect.xMax, body.y, SplitterWidth, body.height);
+            Rect detailRect = new Rect(splitterRect.xMax, body.y, body.width - splitterRect.xMax, body.height);
 
-                if (_catalog.Count == 0)
-                {
-                    EditorGUILayout.HelpBox("No event types found. Define a type implementing ISignal, ICue, ICommand, ICommand<T> or IRequest<T>.", MessageType.Info);
-                    return;
-                }
-                if (filtered.Count == 0)
-                {
-                    // Tell the two "nothing here" cases apart: the eye hiding everything that would otherwise match vs. a genuine no-match.
-                    bool onlyHiddenMatch = !_showHidden && EventCatalog.Filter(_catalog, _search, includeHidden: true).Count > 0;
-                    EditorGUILayout.HelpBox(
-                        onlyHiddenMatch
-                            ? "Only hidden events match. Toggle the eye in the toolbar to show them."
-                            : "No event type matches the search.",
-                        MessageType.Info);
-                    return;
-                }
-
-                foreach (KeyValuePair<EventKind, List<EventEntry>> group in groups)
-                {
-                    DrawGroupHeader(group.Key, group.Value.Count);
-                    foreach (EventEntry entry in group.Value)
-                        DrawRow(entry);
-                }
-            }
+            DrawTreePane(treeRect);
+            HandleSplitter(splitterRect);
+            DrawDetailPane(detailRect);
         }
 
         private void DrawToolbar()
         {
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                _search = EditorGUILayout.TextField(_search, EditorStyles.toolbarSearchField, MoreGUI.WidthXLOpt);
+                string search = EditorGUILayout.TextField(_search, EditorStyles.toolbarSearchField, MoreGUI.WidthXLOpt);
 
                 GUILayout.FlexibleSpace();
 
                 if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(60)))
+                {
                     _catalog = EventCatalog.Build();
+                    RebuildTree();
+                }
 
-                _showHidden = GUILayout.Toggle(_showHidden, ShowHiddenContent(_showHidden), EditorStyles.toolbarButton, MoreGUI.WidthXSOpt);
+                bool showHidden = GUILayout.Toggle(_showHidden, ShowHiddenContent(_showHidden), EditorStyles.toolbarButton, MoreGUI.WidthXSOpt);
+
+                if (search != _search || showHidden != _showHidden)
+                {
+                    _search = search;
+                    _showHidden = showHidden;
+                    RebuildTree();
+                }
+            }
+        }
+
+        private void DrawTreePane(Rect rect)
+        {
+            if (_catalog.Count == 0)
+            {
+                DrawPaneInfo(rect, "No event types found. Define a type implementing ISignal, ICue, ICommand, ICommand<T> or IRequest<T>.");
+                return;
+            }
+            if (_visibleCount == 0)
+            {
+                DrawPaneInfo(rect, _onlyHiddenMatch
+                    ? "Only hidden events match. Toggle the eye in the toolbar to show them."
+                    : "No event type matches the search.");
+                return;
+            }
+
+            _tree.OnGUI(rect);
+        }
+
+        // The draggable divider between the two panes; drives _treeWidth (clamped back in OnGUI).
+        private void HandleSplitter(Rect rect)
+        {
+            EditorGUI.DrawRect(new Rect(rect.x + rect.width * 0.5f - 0.5f, rect.y, 1f, rect.height), new Color(0f, 0f, 0f, 0.25f));
+            EditorGUIUtility.AddCursorRect(rect, MouseCursor.ResizeHorizontal);
+
+            Event e = Event.current;
+            switch (e.type)
+            {
+                case EventType.MouseDown when rect.Contains(e.mousePosition):
+                    _resizingSplitter = true;
+                    e.Use();
+                    break;
+                case EventType.MouseDrag when _resizingSplitter:
+                    _treeWidth += e.delta.x;
+                    e.Use();
+                    Repaint();
+                    break;
+                case EventType.MouseUp when _resizingSplitter:
+                    _resizingSplitter = false;
+                    e.Use();
+                    break;
+            }
+        }
+
+        private void DrawDetailPane(Rect rect)
+        {
+            using (new GUILayout.AreaScope(rect))
+            {
+                EventEntry entry = _tree.SelectedEntry;
+                if (entry == null)
+                {
+                    EditorGUILayout.Space(8);
+                    EditorGUILayout.LabelField("Select an event to draft and fire it.", EditorStyles.wordWrappedMiniLabel);
+                    return;
+                }
+
+                using (EditorGUILayout.ScrollViewScope scroll = new EditorGUILayout.ScrollViewScope(_detailScroll))
+                {
+                    _detailScroll = scroll.scrollPosition;
+                    DrawDetailHeader(entry);
+                    DrawEmitBox(entry);
+                    DrawLiveStatus(entry);
+                }
+            }
+        }
+
+        private static void DrawPaneInfo(Rect rect, string message)
+        {
+            using (new GUILayout.AreaScope(rect))
+            {
+                EditorGUILayout.Space(4);
+                EditorGUILayout.HelpBox(message, MessageType.Info);
             }
         }
 
@@ -159,75 +240,36 @@ namespace SideXP.Broadcaster.EditorOnly
         private static GUIContent ShowHiddenContent(bool showHidden)
         {
             string icon = showHidden ? "animationvisibilitytoggleon" : "animationvisibilitytoggleoff";
-            string tooltip = "Toggle hidden events.";
-            return new GUIContent(EditorGUIUtility.IconContent(icon).image, tooltip);
+            return new GUIContent(EditorGUIUtility.IconContent(icon).image, "Toggle hidden events.");
         }
 
-        private static void DrawGroupHeader(EventKind kind, int count)
+        #endregion
+
+
+        #region Details pane
+
+        private void DrawDetailHeader(EventEntry entry)
         {
-            EditorGUILayout.Space(2);
-            EditorGUILayout.LabelField($"{KindLabel(kind)} ({count})", EditorStyles.boldLabel);
-        }
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField(entry.DisplayName, EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(KindName(entry.Kind) + ResultTypeSuffix(entry), EditorStyles.miniLabel);
 
-        private void DrawRow(EventEntry entry)
-        {
-            string key = entry.EventType.AssemblyQualifiedName;
-            bool expanded = _expanded.Contains(key);
+            string fullName = string.IsNullOrEmpty(entry.Namespace) ? entry.Name : entry.Namespace + "." + entry.Name;
+            EditorGUILayout.LabelField(fullName, EditorStyles.miniLabel);
 
-            Rect rowRect = EditorGUILayout.GetControlRect();
-            Rect foldoutRect = new Rect(rowRect.x, rowRect.y, rowRect.width - LiveColumnsWidth, rowRect.height);
-            Rect liveRect = new Rect(foldoutRect.xMax, rowRect.y, LiveColumnsWidth, rowRect.height);
-
-            GUIContent label = new GUIContent(entry.DisplayName, entry.Description);
-            bool now = EditorGUI.Foldout(foldoutRect, expanded, label, true);
-            if (now != expanded)
+            if (!string.IsNullOrEmpty(entry.Description))
             {
-                if (now) _expanded.Add(key);
-                else _expanded.Remove(key);
+                EditorGUILayout.Space(2);
+                EditorGUILayout.LabelField(entry.Description, EditorStyles.wordWrappedLabel);
             }
 
-            if (Application.isPlaying)
-                DrawLiveColumns(liveRect, entry);
-
-            if (now)
-                DrawEmitBox(entry);
-        }
-
-        private void DrawLiveColumns(Rect rect, EventEntry entry)
-        {
-            if (_live == null || !_live.TryGet(entry.EventType, out EventLiveState state))
-                return;
-
-            string text;
-            switch (entry.Kind)
-            {
-                case EventKind.Signal:
-                    text = state.HasProvider
-                        ? $"{state.Listeners} listeners · provider"
-                        : $"{state.Listeners} listeners";
-                    break;
-                case EventKind.Cue:
-                    text = $"{state.Performers} performers";
-                    break;
-                default:
-                    text = state.HasHandler
-                        ? $"handler: {OwnerName(state.HandlerOwner)}"
-                        : "no handler";
-                    break;
-            }
-
-            GUIStyle style = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight };
-            GUI.Label(rect, text, style);
+            EditorGUILayout.Space(4);
         }
 
         private void DrawEmitBox(EventEntry entry)
         {
-            using (new EditorGUI.IndentLevelScope())
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                if (!string.IsNullOrEmpty(entry.Description))
-                    EditorGUILayout.LabelField(entry.Description, EditorStyles.wordWrappedMiniLabel);
-
                 RowState row = GetRow(entry);
 
                 if (!row.Draft.CanInstantiate)
@@ -275,6 +317,43 @@ namespace SideXP.Broadcaster.EditorOnly
             GUI.color = previous;
         }
 
+        private void DrawLiveStatus(EventEntry entry)
+        {
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("Live", EditorStyles.boldLabel);
+
+            if (!Application.isPlaying)
+            {
+                EditorGUILayout.LabelField("Registrations show in play mode.", EditorStyles.miniLabel);
+                return;
+            }
+
+            if (_live == null || !_live.TryGet(entry.EventType, out EventLiveState state))
+            {
+                EditorGUILayout.LabelField("Nothing registered for this event yet.", EditorStyles.miniLabel);
+                return;
+            }
+
+            string text;
+            switch (entry.Kind)
+            {
+                case EventKind.Signal:
+                    text = state.HasProvider
+                        ? $"{state.Listeners} listeners · provider alive"
+                        : $"{state.Listeners} listeners";
+                    break;
+                case EventKind.Cue:
+                    text = $"{state.Performers} performers";
+                    break;
+                default:
+                    text = state.HasHandler
+                        ? $"handler: {OwnerName(state.HandlerOwner)}"
+                        : "no handler";
+                    break;
+            }
+            EditorGUILayout.LabelField(text, EditorStyles.miniLabel);
+        }
+
         #endregion
 
 
@@ -317,6 +396,16 @@ namespace SideXP.Broadcaster.EditorOnly
 
         #region Helpers
 
+        private void RebuildTree()
+        {
+            List<EventEntry> filtered = EventCatalog.Filter(_catalog, _search, _showHidden);
+            _visibleCount = filtered.Count;
+            _onlyHiddenMatch = !_showHidden && _visibleCount == 0 && EventCatalog.Filter(_catalog, _search, includeHidden: true).Count > 0;
+
+            _tree.SetEntries(filtered);
+            _tree.Reload();
+        }
+
         private RowState GetRow(EventEntry entry)
         {
             if (!_rows.TryGetValue(entry.EventType, out RowState row))
@@ -327,14 +416,14 @@ namespace SideXP.Broadcaster.EditorOnly
             return row;
         }
 
-        private static string KindLabel(EventKind kind)
+        private static string KindName(EventKind kind)
         {
             switch (kind)
             {
-                case EventKind.Signal: return "Signals";
-                case EventKind.Cue: return "Cues";
-                case EventKind.Command: return "Commands";
-                case EventKind.Request: return "Requests";
+                case EventKind.Signal: return "Signal";
+                case EventKind.Cue: return "Cue";
+                case EventKind.Command: return "Command";
+                case EventKind.Request: return "Request";
                 default: return kind.ToString();
             }
         }
@@ -370,7 +459,7 @@ namespace SideXP.Broadcaster.EditorOnly
 
         #region Types
 
-        // Non-serialized per-row state: recreated lazily after a domain reload (only the expanded set persists).
+        // Non-serialized per-type details state: recreated lazily after a domain reload (the tree's own state persists separately).
         private sealed class RowState
         {
             public EventDraft Draft;

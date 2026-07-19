@@ -23,7 +23,7 @@ namespace SideXP.Broadcaster.Scavengers
 
         /// <summary>
         /// Checks whether this entity can move in a given direction. Outputs the destination tile and whatever blocks the move (if any),
-        /// without starting any movement — so a caller can decide to slide there and wait for it, or react to the blocker.
+        /// without starting any movement, so a caller can decide to slide there and wait for it, or react to the blocker.
         /// </summary>
         /// <param name="end">The destination tile if the move is possible.</param>
         /// <param name="hit">The object that blocks the movement, if any.</param>
