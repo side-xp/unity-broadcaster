@@ -105,8 +105,9 @@ namespace SideXP.Broadcaster.Scavengers
             // Mark setup, cleared in EndSetup()
             doingSetup = true;
 
-            // Every level begins on the player's turn
+            // Establish this level's starting state
             SetPlayersTurn(true);
+            Broadcaster.Emit(new FoodChanged { current = playerFoodPoints, source = FoodChangeSource.Move });
 
             // Announce the new level; the UI owns the level card and how long it stays up
             Broadcaster.Emit(new LevelStarted { level = level });

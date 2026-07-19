@@ -394,14 +394,14 @@ Broadcaster.Order(new AdjustFood { delta = -1, source = FoodChangeSource.Move })
 Broadcaster.Provide<FoodChanged>(this, () => new FoodChanged { current = playerFoodPoints, source = FoodChangeSource.Move });
 ```
 
-And the HUD finally gets its seed (the value the UI section left blank on purpose) by subscribing with `init: true`:
+The HUD reads it back by subscribing with `init: true`, which pulls the current food the moment it subscribes:
 
 ```csharp
 // GameHUD
 Broadcaster.Subscribe<FoodChanged>(this, OnFoodChanged, init: true);
 ```
 
-On every level start the HUD pulls the current food from the provider, so it shows the right number immediately, including the carried-over total on level 2 and beyond.
+That's the read mechanism. The reliable *seed* at level start comes from the owner announcing it (covered just below). Either way, the counter the UI section left blank now shows the right number, including the carried-over total on level 2 and beyond.
 
 **Turn state: `GameManager` provides, `Player` subscribes.** The poll becomes a push, and the write disappears:
 
@@ -433,16 +433,26 @@ if (!Broadcaster.TryGetCurrent(out PlayerPosition player))
 
 That single change deletes `FindGameObjectWithTag` and the last thing the sample read from a **tag**.
 
+**Establishing the starting state.** A provider only answers *when asked*, so a subscriber that came up before the owner's provider was ready would miss its `init` pull and see nothing. In this sample that's a real risk: `GameManager` is spawned by a `Loader`, so the scene's subscribers can initialize before it. The fix is to have the owner establish each level's starting state in one place and *announce* it:
+
+```csharp
+// GameManager.InitGame (runs from sceneLoaded, after every subscriber's OnEnable)
+SetPlayersTurn(true);                                                                             // the player acts first
+Broadcaster.Emit(new FoodChanged { current = playerFoodPoints, source = FoodChangeSource.Move }); // seed the HUD
+```
+
+Because this runs after everyone's `OnEnable`, no subscriber present at level start misses it. `init: true` and `TryGetCurrent` then cover the *other* case: reading the current value on demand, or when a system joins mid-game, which is exactly how the enemies pull `PlayerPosition` each turn. The rule of thumb: **the owner announces state when it's established; readers pull it when they need it.**
+
 ### Why providers, and not requests
 
 There's a fourth event kind we haven't used: the **request** (`IRequest<T>`). "Where is the player?" *sounds* like a question, so why is it a provider?
 
-Because every cross-system read in this game is *"what is the current value of some state?"* — and that's exactly what a provider is for. A request is for a **computed, parameterized** answer: `IsWalkable { Vector2Int position }`, `PathTo { Vector2Int goal }` — a question that takes arguments and recomputes each time it's asked. Scavengers has none. Even walkability is a physics linecast that `MovingObject` runs on itself; no other system ever asks it.
+Because every cross-system read in this game is *"what is the current value of some state?"*, and that's exactly what a provider is for. A request is for a **computed**, **parameterized** or even **asynchronous** answer: `IsWalkable { Vector2Int position }`, `PathTo { Vector2Int goal }`, a question that takes arguments and recomputes each time it's asked. This *Scavengers* demo has none. Even walkability is a physics linecast that `MovingObject` runs on itself; no other system ever asks it.
 
-So the demo covers three kinds honestly instead of manufacturing a fourth just to exercise the API. If your game *does* have a genuine query — "is this tile walkable?", "what's the shortest path?" — that's what `Answer`/`Ask` are for: the same single-handler contract as a command, but side-effect free, because asking a question must never change the answer.
+If your game *does* have a genuine query ("is this tile walkable?", "what's the shortest path?") that's what `Answer`/`Ask` are for: the same single-handler contract as a command, but side-effect free, because asking a question must never change the answer.
 
 ### The payoff
 
-- The food counter is correct on every level start seeded by `init: true`, not by a manual hand-off.
+- The food counter is correct on every level start, seeded by the owner announcing it, not by a fragile hand-off.
 - Turn state is readable everywhere and writable only by its owner: "reading it" no longer means "you can break it."
 - No `FindGameObjectWithTag`, no tags at all, so no hidden project setup
