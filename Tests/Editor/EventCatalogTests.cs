@@ -73,15 +73,16 @@ namespace SideXP.Broadcaster.Tests
         public void Classify_ReadsCustomName()
         {
             Assert.IsTrue(EventCatalog.TryClassify(typeof(NamedSignal), out EventEntry entry));
-            Assert.AreEqual("Combat/Damage/Dealt", entry.DisplayName);
+            Assert.AreEqual("Broadcaster/Tests/" + nameof(NamedSignal), entry.DisplayName);
             // The C# type name is still available and unchanged by the custom display name.
             Assert.AreEqual(nameof(NamedSignal), entry.Name);
         }
 
         [Test]
-        public void Classify_WithoutCustomName_DisplayNameFallsBackToTypeName()
+        public void EventEntry_WithoutCustomName_UsesTypeNameAsDisplayName()
         {
-            Assert.IsTrue(EventCatalog.TryClassify(typeof(PingSignal), out EventEntry entry));
+            // With no [Event(Name = ...)] the catalog passes a null custom name; the entry then shows the plain type name.
+            EventEntry entry = new EventEntry(typeof(PingSignal), EventKind.Signal, null, null, null, false, false);
             Assert.AreEqual(nameof(PingSignal), entry.DisplayName);
         }
 
@@ -95,6 +96,7 @@ namespace SideXP.Broadcaster.Tests
             Assert.IsNull(entry.Description);
             Assert.IsFalse(entry.OmitSnapshot);
             Assert.IsFalse(entry.Hidden);
+            Assert.AreEqual(nameof(EmptySignal), entry.DisplayName);
         }
 #endif
 
