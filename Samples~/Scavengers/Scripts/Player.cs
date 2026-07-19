@@ -1,6 +1,5 @@
 #pragma warning disable IDE1006 // Naming Styles, disabled for demo
 using UnityEngine;
-using UnityEngine.UI;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
@@ -24,10 +23,6 @@ namespace SideXP.Broadcaster.Scavengers
         [Tooltip("The controls for moving the player.")]
         public InputAction moveAction = new InputAction("Move", InputActionType.Value, expectedControlType: "Vector2");
 
-        [Header("UI")]
-
-        public Text foodText;
-
         private Animator animator;
         private int food;
 
@@ -36,7 +31,8 @@ namespace SideXP.Broadcaster.Scavengers
             animator = GetComponent<Animator>();
 
             food = GameManager.instance.playerFoodPoints;
-            foodText.text = "Food: " + food;
+            // The HUD only hears about *changes* to the food total, so it has no starting value to show yet.
+            // Seeding it is deliberately deferred to the provider step (2.4); until then the HUD comes up blank.
 
             base.Start();
         }
@@ -79,9 +75,9 @@ namespace SideXP.Broadcaster.Scavengers
         /// <inheritdoc cref="MovingObject.AttemptMove{T}(int, int)"/>
         protected override void AttemptMove<T>(int xDir, int yDir)
         {
-            // Decrease food for each move
+            // Decrease food for each move, and announce the change so the HUD can update
             food--;
-            foodText.text = "Food: " + food;
+            Broadcaster.Emit(new FoodChanged { Current = food, Delta = -1, Source = FoodChangeSource.Move });
 
             base.AttemptMove<T>(xDir, yDir);
 
@@ -117,7 +113,7 @@ namespace SideXP.Broadcaster.Scavengers
             else if (other.TryGetComponent(out Collectible collectible))
             {
                 food += collectible.points;
-                foodText.text = "+" + collectible.points + " Food: " + food;
+                Broadcaster.Emit(new FoodChanged { Current = food, Delta = collectible.points, Source = FoodChangeSource.Pickup });
 
                 // Emit what happened; the audio system decides how each kind of pickup sounds
                 if (collectible.kind == CollectibleKind.Food)
@@ -145,7 +141,7 @@ namespace SideXP.Broadcaster.Scavengers
         {
             animator.SetTrigger("hit");
             food -= loss;
-            foodText.text = "-" + loss + " Food: " + food;
+            Broadcaster.Emit(new FoodChanged { Current = food, Delta = -loss, Source = FoodChangeSource.Damage });
             CheckIfGameOver();
         }
 

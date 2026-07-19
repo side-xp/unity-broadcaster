@@ -4,7 +4,6 @@ using System.Collections.Generic;
 
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.UI;
 
 namespace SideXP.Broadcaster.Scavengers
 {
@@ -32,11 +31,6 @@ namespace SideXP.Broadcaster.Scavengers
 
         /// <summary>Flag enabled if it's currently the player's turn.</summary>
         [HideInInspector] public bool playersTurn = true;
-
-        /// <summary>UI text for displaying the current level number.</summary>
-        private Text levelText;
-        /// <summary>UI image to block out level during setup.</summary>
-        private GameObject levelImage;
 
         private BoardManager boardScript;
         private List<Enemy> enemies;
@@ -97,15 +91,12 @@ namespace SideXP.Broadcaster.Scavengers
         /// </summary>
         private void InitGame()
         {
-            // Mark setup, cleared in HideLevelImage()
+            // Mark setup, cleared in EndSetup()
             doingSetup = true;
 
-            // Setup UI
-            levelImage = GameObject.Find("iLevelImage");
-            levelText = GameObject.Find("tLevelText").GetComponent<Text>();
-            levelText.text = "Day " + level;
-            levelImage.SetActive(true);
-            Invoke("HideLevelImage", levelStartDelay);
+            // Announce the new level; the UI owns the level card and how long it stays up
+            Broadcaster.Emit(new LevelStarted { Level = level });
+            Invoke(nameof(EndSetup), levelStartDelay);
 
             // Reset board
             enemies.Clear();
@@ -113,11 +104,10 @@ namespace SideXP.Broadcaster.Scavengers
         }
 
         /// <summary>
-        /// Hides the black overlay once <see cref="levelStartDelay"/> has elapsed.
+        /// Clears the setup gate once <see cref="levelStartDelay"/> has elapsed, so enemies may start moving.
         /// </summary>
-        private void HideLevelImage()
+        private void EndSetup()
         {
-            levelImage.SetActive(false);
             doingSetup = false;
         }
 
@@ -131,12 +121,11 @@ namespace SideXP.Broadcaster.Scavengers
 
 
         /// <summary>
-        /// Triggers the game over screen and disables this game manager.
+        /// Ends the run and disables this game manager.
         /// </summary>
         public void GameOver()
         {
-            levelText.text = "After " + level + " days, you starved.";
-            levelImage.SetActive(true);
+            Broadcaster.Emit(new RunEnded { Level = level });
             enabled = false;
         }
 
