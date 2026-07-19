@@ -66,15 +66,39 @@ namespace SideXP.Broadcaster.Tests
             Assert.IsTrue(EventCatalog.TryClassify(typeof(DescribedSignal), out EventEntry entry));
             Assert.AreEqual("A described signal.", entry.Description);
             Assert.IsTrue(entry.OmitSnapshot);
+            Assert.IsTrue(entry.Hidden);
         }
 
         [Test]
-        public void Classify_TypeWithoutAttribute_HasNoDescription()
+        public void Classify_ReadsCustomName()
         {
-            Assert.IsTrue(EventCatalog.TryClassify(typeof(PingSignal), out EventEntry entry));
+            Assert.IsTrue(EventCatalog.TryClassify(typeof(NamedSignal), out EventEntry entry));
+            Assert.AreEqual("Broadcaster/Tests/" + nameof(NamedSignal), entry.DisplayName);
+            // The C# type name is still available and unchanged by the custom display name.
+            Assert.AreEqual(nameof(NamedSignal), entry.Name);
+        }
+
+        [Test]
+        public void EventEntry_WithoutCustomName_UsesTypeNameAsDisplayName()
+        {
+            // With no [Event(Name = ...)] the catalog passes a null custom name; the entry then shows the plain type name.
+            EventEntry entry = new EventEntry(typeof(PingSignal), EventKind.Signal, null, null, null, false, false);
+            Assert.AreEqual(nameof(PingSignal), entry.DisplayName);
+        }
+
+        // EmptySignal is only left un-hidden (a valid "no metadata" fixture) in a demos-enabled project; without SIDEXP_DEMOS it's marked
+        // hidden so package consumers don't see it, and this assertion wouldn't hold. See EventsWindowTestEvents.
+#if SIDEXP_DEMOS
+        [Test]
+        public void Classify_TypeWithoutAttribute_HasNoMetadata()
+        {
+            Assert.IsTrue(EventCatalog.TryClassify(typeof(EmptySignal), out EventEntry entry));
             Assert.IsNull(entry.Description);
             Assert.IsFalse(entry.OmitSnapshot);
+            Assert.IsFalse(entry.Hidden);
+            Assert.AreEqual(nameof(EmptySignal), entry.DisplayName);
         }
+#endif
 
         #endregion
 
@@ -140,7 +164,7 @@ namespace SideXP.Broadcaster.Tests
         public void Filter_MatchesNameCaseInsensitively()
         {
             List<EventEntry> entries = EventCatalog.BuildFrom(new[] { typeof(PingSignal), typeof(PongSignal), typeof(FlashCue) });
-            List<EventEntry> filtered = EventCatalog.Filter(entries, "ping");
+            List<EventEntry> filtered = EventCatalog.Filter(entries, "ping", includeHidden: true);
 
             Assert.AreEqual(1, filtered.Count);
             Assert.AreEqual(typeof(PingSignal), filtered[0].EventType);
@@ -150,7 +174,7 @@ namespace SideXP.Broadcaster.Tests
         public void Filter_MatchesDescription()
         {
             List<EventEntry> entries = EventCatalog.BuildFrom(new[] { typeof(DescribedSignal), typeof(PingSignal) });
-            List<EventEntry> filtered = EventCatalog.Filter(entries, "described");
+            List<EventEntry> filtered = EventCatalog.Filter(entries, "described", includeHidden: true);
 
             Assert.AreEqual(1, filtered.Count);
             Assert.AreEqual(typeof(DescribedSignal), filtered[0].EventType);
@@ -160,9 +184,27 @@ namespace SideXP.Broadcaster.Tests
         public void Filter_EmptySearch_ReturnsAll()
         {
             List<EventEntry> entries = EventCatalog.BuildFrom(new[] { typeof(PingSignal), typeof(FlashCue) });
-            Assert.AreEqual(2, EventCatalog.Filter(entries, "").Count);
-            Assert.AreEqual(2, EventCatalog.Filter(entries, "   ").Count);
+            Assert.AreEqual(2, EventCatalog.Filter(entries, "", includeHidden: true).Count);
+            Assert.AreEqual(2, EventCatalog.Filter(entries, "   ", includeHidden: true).Count);
         }
+
+        // Relies on EmptySignal being visible, which only holds with SIDEXP_DEMOS (it's hidden otherwise). See EventsWindowTestEvents.
+#if SIDEXP_DEMOS
+        [Test]
+        public void Filter_ExcludesHiddenEntries_UnlessIncluded()
+        {
+            // DescribedSignal is [Event(Hidden = true)]; EmptySignal carries no attribute here (demos enabled), so it stays visible.
+            List<EventEntry> entries = EventCatalog.BuildFrom(new[] { typeof(DescribedSignal), typeof(EmptySignal) });
+
+            // The eye off (includeHidden: false) drops the hidden entry regardless of the search matching it.
+            List<EventEntry> visible = EventCatalog.Filter(entries, "", includeHidden: false);
+            Assert.AreEqual(1, visible.Count);
+            Assert.AreEqual(typeof(EmptySignal), visible[0].EventType);
+
+            // The eye on (the default) keeps hidden entries like any other.
+            Assert.AreEqual(2, EventCatalog.Filter(entries, "", includeHidden: true).Count);
+        }
+#endif
 
         [Test]
         public void GroupByKind_OrdersGroupsAndOmitsEmptyKinds()

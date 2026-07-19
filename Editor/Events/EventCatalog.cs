@@ -72,7 +72,7 @@ namespace SideXP.Broadcaster.EditorOnly
                 return false;
 
             EventAttribute attribute = type.GetCustomAttribute<EventAttribute>(inherit: false);
-            entry = new EventEntry(type, kind, resultType, attribute?.Description, attribute != null && attribute.OmitSnapshot);
+            entry = new EventEntry(type, kind, resultType, attribute?.Name, attribute?.Description, attribute != null && attribute.OmitSnapshot, attribute != null && attribute.Hidden);
             return true;
         }
 
@@ -139,13 +139,16 @@ namespace SideXP.Broadcaster.EditorOnly
         }
 
         /// <summary>
-        /// Keeps the entries whose name, namespace or description contains <paramref name="search"/> (case-insensitive). A null or empty
-        /// search returns every entry.
+        /// Keeps the entries whose name, namespace or description contains <paramref name="search"/> (case-insensitive), optionally dropping
+        /// the ones marked hidden. A null or empty search matches every (still-visible) entry.
         /// </summary>
         /// <param name="entries">The entries to filter.</param>
         /// <param name="search">The text to match, or null/empty to match everything.</param>
+        /// <param name="includeHidden">By default, entries flagged with <c>[Broadcast(Hidden = true)]</c> are left out regardless of the
+        /// search. If enabled, hidden entries are kept like any other.
+        /// </param>
         /// <returns>The matching entries, in their original order.</returns>
-        public static List<EventEntry> Filter(IEnumerable<EventEntry> entries, string search)
+        public static List<EventEntry> Filter(IEnumerable<EventEntry> entries, string search, bool includeHidden = false)
         {
             List<EventEntry> result = new List<EventEntry>();
             if (entries == null)
@@ -154,6 +157,8 @@ namespace SideXP.Broadcaster.EditorOnly
             bool matchAll = string.IsNullOrWhiteSpace(search);
             foreach (EventEntry entry in entries)
             {
+                if (!includeHidden && entry.Hidden)
+                    continue;
                 if (matchAll || Matches(entry, search))
                     result.Add(entry);
             }
@@ -166,6 +171,7 @@ namespace SideXP.Broadcaster.EditorOnly
         private static bool Matches(EventEntry entry, string search)
         {
             return Contains(entry.Name, search)
+                || Contains(entry.DisplayName, search)
                 || Contains(entry.Namespace, search)
                 || Contains(entry.Description, search);
         }
