@@ -84,4 +84,20 @@ namespace SideXP.Broadcaster.Scavengers
         /// <summary>The level the player had reached when the run ended.</summary>
         public int Level;
     }
+
+    /// <summary>
+    /// Ends the current run. Handled by the <see cref="GameManager"/>.
+    /// </summary>
+    [Event("End the current run (starvation, a lethal tile, a debug shortcut, ...).")]
+    public struct EndRun : ICommand { }
+
+    /// <summary>
+    /// Deals damage to the player. Handled by the <see cref="Player"/>.
+    /// </summary>
+    [Event("Damage the player, reducing its food by Amount.")]
+    public struct DamagePlayer : ICommand
+    {
+        /// <summary>How much food the damage costs the player.</summary>
+        public int Amount;
+    }
 }

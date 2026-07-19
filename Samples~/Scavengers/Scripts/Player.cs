@@ -40,11 +40,14 @@ namespace SideXP.Broadcaster.Scavengers
         private void OnEnable()
         {
             moveAction.Enable();
+            // Become the single authority on damaging the player: anything can hurt it by ordering DamagePlayer
+            Broadcaster.Obey<DamagePlayer>(this, OnDamagePlayer);
         }
 
         private void OnDisable()
         {
             moveAction.Disable();
+            Broadcaster.UnregisterAll(this);
             // Store current amount of food on the GameManager so it can be re-loaded in next level
             GameManager.instance.playerFoodPoints = food;
         }
@@ -135,25 +138,25 @@ namespace SideXP.Broadcaster.Scavengers
         }
 
         /// <summary>
-        /// Makes the player lose food.
+        /// Handles the <see cref="DamagePlayer"/> command: reduces the player's food and reacts to it.
         /// </summary>
-        public void LoseFood(int loss)
+        private void OnDamagePlayer(DamagePlayer command)
         {
             animator.SetTrigger("hit");
-            food -= loss;
-            Broadcaster.Emit(new FoodChanged { Current = food, Delta = -loss, Source = FoodChangeSource.Damage });
+            food -= command.Amount;
+            Broadcaster.Emit(new FoodChanged { Current = food, Delta = -command.Amount, Source = FoodChangeSource.Damage });
             CheckIfGameOver();
         }
 
         /// <summary>
-        /// Checks if the player has remaining food points. If not, ends the game.
+        /// Checks if the player has remaining food points. If not, ends the run.
         /// </summary>
         private void CheckIfGameOver()
         {
             if (food <= 0)
             {
                 Broadcaster.Emit(new PlayerDied());
-                GameManager.instance.GameOver();
+                Broadcaster.Order(new EndRun());
             }
         }
     }

@@ -61,6 +61,9 @@ namespace SideXP.Broadcaster.Scavengers
             enemies = new List<Enemy>();
             boardScript = GetComponent<BoardManager>();
             SceneManager.sceneLoaded += OnSceneLoaded;
+
+            // Become the single authority that ends the run. Anything can end it by ordering EndRun, without a reference here.
+            Broadcaster.Obey<EndRun>(this, OnEndRun);
         }
 
         private void Update()
@@ -75,6 +78,7 @@ namespace SideXP.Broadcaster.Scavengers
         private void OnDestroy()
         {
             SceneManager.sceneLoaded -= OnSceneLoaded;
+            Broadcaster.UnregisterAll(this);
         }
 
         /// <summary>
@@ -121,9 +125,9 @@ namespace SideXP.Broadcaster.Scavengers
 
 
         /// <summary>
-        /// Ends the run and disables this game manager.
+        /// Handles the <see cref="EndRun"/> command: announces the run's end and disables this game manager.
         /// </summary>
-        public void GameOver()
+        private void OnEndRun(EndRun command)
         {
             Broadcaster.Emit(new RunEnded { Level = level });
             enabled = false;

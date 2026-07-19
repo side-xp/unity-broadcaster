@@ -67,9 +67,8 @@ namespace SideXP.Broadcaster.Scavengers
         /// <inheritdoc cref="MovingObject.OnCantMove{T}(T)"/>
         protected override void OnCantMove<T>(T component)
         {
-            Player hitPlayer = component as Player;
-            // Make the player lose food, based on the configured damage
-            hitPlayer.LoseFood(playerDamage);
+            // Order the damage instead of reaching into the player's API (the enemy doesn't even need to know Player exists)
+            Broadcaster.Order(new DamagePlayer { Amount = playerDamage });
             // Play feedback
             animator.SetTrigger("attack");
             Broadcaster.Emit(new EnemyAttacked());
