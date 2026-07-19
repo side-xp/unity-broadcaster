@@ -16,6 +16,9 @@ namespace SideXP.Broadcaster.EditorOnly
     internal sealed class EventTreeView : TreeView<int>
     {
 
+        /// <summary>The thickness (in pixels) of the colorized border.</summary>
+        private const float EDGE_THICKNESS = 3f;
+
         // The entries to nest, and the id-to-node map rebuilt on every reload so selection and per-row drawing can resolve back to a node.
         private List<EventEntry> _entries = new List<EventEntry>();
         private readonly Dictionary<int, EventTreeNode> _nodesById = new Dictionary<int, EventTreeNode>();
@@ -110,10 +113,21 @@ namespace SideXP.Broadcaster.EditorOnly
                 content.xMin += 18f;
             }
 
-            // The right cluster: a live badge (play mode) then the kind tag, drawn right-to-left so the label gets whatever room is left.
+            // Colorize the row by kind: a faint tint over the whole row, a solid bar at its left edge (the Hierarchy's prefab-override accent
+            // pattern), and the matching tint on the kind tag. Folders stay neutral since they can group mixed kinds. The right cluster (live
+            // badge then kind tag) is drawn right-to-left so the label gets whatever room is left.
             if (node.Entry != null)
             {
-                content.xMax = DrawRightTag(content, node.Entry.Kind.ToString());
+                Color kindColor = EventKindColors.Get(node.Entry.Kind);
+
+                // Over the alternating background so the light/dark banding still shows through the tint; skipped when selected so the
+                // selection highlight stays clean.
+                if (!args.selected)
+                    EditorGUI.DrawRect(rect, EventKindColors.Background(node.Entry.Kind));
+
+                EditorGUI.DrawRect(new Rect(rect.x, rect.y, EDGE_THICKNESS, rect.height), kindColor);
+
+                content.xMax = DrawRightTag(content, node.Entry.Kind.ToString(), kindColor);
 
                 string live = LiveBadge(node.Entry);
                 if (!string.IsNullOrEmpty(live))
@@ -123,13 +137,26 @@ namespace SideXP.Broadcaster.EditorOnly
             GUI.Label(content, node.Name);
         }
 
-        // Draws text right-aligned within rect and returns the x it started at, so the next thing can be placed to its left.
-        private static float DrawRightTag(Rect rect, string text)
+        // Draws text right-aligned within rect and returns the x it started at, so the next thing can be placed to its left. An optional
+        // color tints the text (the shared style's color is set transiently, which is safe in immediate-mode GUI).
+        private static float DrawRightTag(Rect rect, string text, Color? color = null)
         {
             GUIContent content = new GUIContent(text);
-            float width = RightTagStyle.CalcSize(content).x;
+            GUIStyle style = RightTagStyle;
+            float width = style.CalcSize(content).x;
             Rect tagRect = new Rect(rect.xMax - width, rect.y, width, rect.height);
-            GUI.Label(tagRect, content, RightTagStyle);
+
+            if (color.HasValue)
+            {
+                Color previous = style.normal.textColor;
+                style.normal.textColor = color.Value;
+                GUI.Label(tagRect, content, style);
+                style.normal.textColor = previous;
+            }
+            else
+            {
+                GUI.Label(tagRect, content, style);
+            }
             return tagRect.x;
         }
 

@@ -274,7 +274,7 @@ namespace SideXP.Broadcaster.EditorOnly
 
                 if (!row.Draft.CanInstantiate)
                 {
-                    EditorGUILayout.HelpBox($"'{entry.DisplayName}' has no public parameterless constructor, so it can't be drafted here.", MessageType.Warning);
+                    EditorGUILayout.HelpBox($"'{entry.DisplayName}' has no public parameterless constructor.", MessageType.Warning);
                     return;
                 }
 
