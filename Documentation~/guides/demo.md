@@ -132,3 +132,109 @@ The `musicSource.Stop()` that used to live in `Player` moves here too, into the 
 Delete the `SoundManager` from the scene and press *Play*: the game runs exactly as before, with no errors — just silent. That single test *is* the proof that no system depends on the audio system.
 
 And feedback is now purely additive. Want a particle when the player eats? Add a listener on `PlayerAte`; it touches no gameplay code, and the existing sound listener never notices the second one.
+
+## Signals - Feeding the UI
+
+The audio rework used signals to remove a dependency. The UI rework uses the *same* vent kind for a different lesson: **fan-out**. One signal can have any number of listeners, none of them aware of the others, so presentation stops being something gameplay code owns, and becomes something any number of systems can hang off the facts gameplay announces.
+
+### The problem
+
+Two different smells, both about the UI leaking into gameplay.
+
+First, `Player` formats its own presentation. It holds a `Text` reference and builds display strings by hand, in three different places:
+
+```csharp
+// Original Player
+public Text foodText;
+// …on a move:
+foodText.text = "Food: " + food;
+// …on a pickup:
+foodText.text = "+" + collectible.points + " Food: " + food;
+// …on a hit:
+foodText.text = "-" + loss + " Food: " + food;
+```
+
+The player script decides what the HUD says and how it's punctuated. Change the wording, or add a second thing that should react to food changing, and you're editing gameplay code.
+
+Second, `GameManager` finds its UI by name:
+
+```csharp
+// Original GameManager.InitGame
+levelImage = GameObject.Find("iLevelImage");
+levelText = GameObject.Find("tLevelText").GetComponent<Text>();
+```
+
+Rename a scene object and the game compiles, runs, and silently fails to show the level card. The dependency is real but invisible to the compiler.
+
+### Broadcaster's solution
+
+Gameplay **announces facts**. A dedicated UI system **listens** and owns everything about how those facts are shown. Same rule as the audio section (*broadcast what happened, not what to do about it*) applied to presentation.
+
+The facts here carry a payload, because the UI needs the values:
+
+| Signal | Payload | Emitted when… |
+| --- | --- | --- |
+| `FoodChanged` | `Current`, `Delta`, `Source` | the player's food total changes |
+| `LevelStarted` | `Level` | a new level begins |
+| `RunEnded` | `Level` | the player starves |
+
+The interesting one is `FoodChanged`. Notice it does **not** carry a formatted string, or even a "should I show a badge?" flag. It carries `Source`, an enum saying *why* the food changed (a `Move`, a `Pickup`, `Damage`):
+
+```csharp
+public enum FoodChangeSource { Move, Pickup, Damage }
+
+public struct FoodChanged : ISignal
+{
+    public int Current;
+    public int Delta;
+    public FoodChangeSource Source;
+}
+```
+
+That distinction is the whole discipline in miniature. Whether a move shows a quiet `Food: 99` while a hit shows `-5 Food: 95` is a *presentation* decision, and it lives in the HUD. Gameplay only reports the fact and its cause. Because the cause is on the payload rather than baked into a display string, any *other* listener (eg. an achievement tracker counting damage taken, a tutorial highlighting pickups, …) can branch on the same `Source` without gameplay knowing they exist.
+
+### The implementation
+
+**1. Emit facts instead of writing text.** `Player` loses its `Text` field entirely and emits `FoodChanged` at each of the three sites:
+
+```csharp
+// A move
+Broadcaster.Emit(new FoodChanged { Current = food, Delta = -1, Source = FoodChangeSource.Move });
+// A pickup
+Broadcaster.Emit(new FoodChanged { Current = food, Delta = collectible.points, Source = FoodChangeSource.Pickup });
+// A hit (in LoseFood)
+Broadcaster.Emit(new FoodChanged { Current = food, Delta = -loss, Source = FoodChangeSource.Damage });
+```
+
+**2. `GameManager` stops knowing the UI exists.** The `GameObject.Find` calls and every `levelText`/`levelImage` reference go away, replaced by two announcements:
+
+```csharp
+// InitGame
+Broadcaster.Emit(new LevelStarted { Level = level });
+// GameOver
+Broadcaster.Emit(new RunEnded { Level = level });
+```
+
+**3. A `GameHUD` listens and owns presentation.** It subscribes to the three signals, holds the scene references (assigned in the inspector, not looked up by name), and decides all formatting, including the "quiet on moves" rule, expressed cleanly against `Source` instead of guessed from the delta:
+
+```csharp
+private void OnFoodChanged(FoodChanged signal)
+{
+    if (signal.Source == FoodChangeSource.Move)
+        foodText.text = "Food: " + signal.Current;
+    else
+        foodText.text = (signal.Delta >= 0 ? "+" : "") + signal.Delta + " Food: " + signal.Current;
+}
+```
+
+> **A note on timing.** `GameManager` keeps its own short setup delay as a *gameplay* gate (enemies mustn't move while the level card is up), and the `GameHUD` separately owns how long the card actually stays on screen. That's two timers describing one beat, a smell we leave in place on purpose. The cue section resolves it: the game will *wait for* the UI's intro to finish rather than run a parallel stopwatch.
+
+### Fan-out
+
+With this in place, `PlayerAte` now has one listener (the sound from the previous section), and could have more. That's fan-out, and it's the point of this section: a designer who wants a HUD flash when the player eats adds a listener on `PlayerAte`; a designer who wants a particle adds another. Neither touches gameplay, and neither touches the other (the emitter has no list of subscribers to update), because it never knew there was a list. Presentation grows by *addition*, never by editing the thing that announced the fact.
+
+### Deliberately left unfinished
+
+There's a rough edge on purpose. `FoodChanged` only fires on a *change*, so a HUD that comes up at the start of a level has nothing to show until the player's first move — the initial food total has nowhere to come from. `Player.Start` used to set that text directly; now it can't, and emitting a fake "change" of zero to seed it would be dishonest.
+
+That gap is the hook into the next real problem. The food total isn't an event: it's **state**, something a newly-spawned listener should be able to *ask for*, not wait to be told about. That's what providers are for, and it's where we go next.
