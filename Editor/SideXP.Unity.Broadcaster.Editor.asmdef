@@ -3,6 +3,7 @@
     "rootNamespace": "SideXP.Broadcaster.EditorOnly",
     "references": [
         "SideXP.Unity.Broadcaster",
+        "SideXP.Unity.Core",
         "SideXP.Unity.Core.Editor"
     ],
     "includePlatforms": [

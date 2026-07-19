@@ -5,6 +5,7 @@ using UnityEditor;
 using UnityEngine;
 
 using SideXP.Core.EditorOnly;
+using SideXP.Core;
 
 namespace SideXP.Broadcaster.EditorOnly
 {
@@ -142,15 +143,14 @@ namespace SideXP.Broadcaster.EditorOnly
         {
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                _search = EditorGUILayout.TextField(_search, EditorStyles.toolbarSearchField);
+                _search = EditorGUILayout.TextField(_search, EditorStyles.toolbarSearchField, MoreGUI.WidthXLOpt);
 
-                _showHidden = GUILayout.Toggle(_showHidden, ShowHiddenContent(_showHidden), EditorStyles.toolbarButton, GUILayout.Width(30));
+                GUILayout.FlexibleSpace();
 
                 if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(60)))
                     _catalog = EventCatalog.Build();
 
-                GUILayout.FlexibleSpace();
-                GUILayout.Label(Application.isPlaying ? "Play mode" : "Edit mode (live columns show in play mode)", EditorStyles.miniLabel);
+                _showHidden = GUILayout.Toggle(_showHidden, ShowHiddenContent(_showHidden), EditorStyles.toolbarButton, MoreGUI.WidthXSOpt);
             }
         }
 
@@ -159,9 +159,7 @@ namespace SideXP.Broadcaster.EditorOnly
         private static GUIContent ShowHiddenContent(bool showHidden)
         {
             string icon = showHidden ? "animationvisibilitytoggleon" : "animationvisibilitytoggleoff";
-            string tooltip = showHidden
-                ? "Showing hidden events (e.g. package test events). Click to hide them."
-                : "Hiding events marked hidden (e.g. package test events). Click to show them.";
+            string tooltip = "Toggle hidden events.";
             return new GUIContent(EditorGUIUtility.IconContent(icon).image, tooltip);
         }
 
