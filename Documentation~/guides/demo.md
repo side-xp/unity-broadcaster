@@ -32,7 +32,7 @@ The concept come from an [old Unity tutorial](https://learn.unity.com/course/int
 
 ## Reworking with Broadcaster
 
-Broadcaster lets a system announce *that something happened*, or *ask another system to do something*, without holding a reference to whoever handles it. Systems no longer wire themselves to each other. Instead, they exchange **events**, and the *kind* of event you pick (a [signal](#signals---making-the-audio-system-independent), a [command](#commands---giving-the-designer-verbs), a request, a cue) is a deliberate contract about what a listener is allowed to do with it.
+Broadcaster lets a system announce *that something happened*, or *ask another system to do something*, without holding a reference to whoever handles it. Systems no longer wire themselves to each other. Instead, they exchange **events**, and the *kind* of event you pick (a [signal](#signals---making-the-audio-system-independent), a [command](#commands---giving-the-verbs), a request, a cue) is a deliberate contract about what a listener is allowed to do with it.
 
 The rework introduces those kinds one at a time, each solving a concrete coupling problem in the original tutorial code. Each section presents a problem, then shows how Broadcaster features solve it.
 
@@ -174,24 +174,24 @@ The facts here carry a payload, because the UI needs the values:
 
 | Signal | Payload | Emitted when… |
 | --- | --- | --- |
-| `FoodChanged` | `Current`, `Delta`, `Source` | the player's food total changes |
-| `LevelStarted` | `Level` | a new level begins |
-| `RunEnded` | `Level` | the player starves |
+| `FoodChanged` | `current`, `delta`, `source` | the player's food total changes |
+| `LevelStarted` | `level` | a new level begins |
+| `RunEnded` | `level` | the player starves |
 
-The interesting one is `FoodChanged`. Notice it does **not** carry a formatted string, or even a "should I show a badge?" flag. It carries `Source`, an enum saying *why* the food changed (a `Move`, a `Pickup`, `Damage`):
+The interesting one is `FoodChanged`. Notice it does **not** carry a formatted string, or even a "should I show a badge?" flag. It carries `source`, an enum saying *why* the food changed (a `Move`, a `Pickup`, `Damage`):
 
 ```csharp
 public enum FoodChangeSource { Move, Pickup, Damage }
 
 public struct FoodChanged : ISignal
 {
-    public int Current;
-    public int Delta;
-    public FoodChangeSource Source;
+    public int current;
+    public int delta;
+    public FoodChangeSource source;
 }
 ```
 
-That distinction is the whole discipline in miniature. Whether a move shows a quiet `Food: 99` while a hit shows `-5 Food: 95` is a *presentation* decision, and it lives in the HUD. Gameplay only reports the fact and its cause. Because the cause is on the payload rather than baked into a display string, any *other* listener (eg. an achievement tracker counting damage taken, a tutorial highlighting pickups, …) can branch on the same `Source` without gameplay knowing they exist.
+That distinction is the whole discipline in miniature. Whether a move shows a quiet `Food: 99` while a hit shows `-5 Food: 95` is a *presentation* decision, and it lives in the HUD. Gameplay only reports the fact and its cause. Because the cause is on the payload rather than baked into a display string, any *other* listener (eg. an achievement tracker counting damage taken, a tutorial highlighting pickups, …) can branch on the same `source` without gameplay knowing they exist.
 
 ### The implementation
 
@@ -199,31 +199,31 @@ That distinction is the whole discipline in miniature. Whether a move shows a qu
 
 ```csharp
 // A move
-Broadcaster.Emit(new FoodChanged { Current = food, Delta = -1, Source = FoodChangeSource.Move });
+Broadcaster.Emit(new FoodChanged { current = food, delta = -1, source = FoodChangeSource.Move });
 // A pickup
-Broadcaster.Emit(new FoodChanged { Current = food, Delta = collectible.points, Source = FoodChangeSource.Pickup });
+Broadcaster.Emit(new FoodChanged { current = food, delta = collectible.points, source = FoodChangeSource.Pickup });
 // A hit (in LoseFood)
-Broadcaster.Emit(new FoodChanged { Current = food, Delta = -loss, Source = FoodChangeSource.Damage });
+Broadcaster.Emit(new FoodChanged { current = food, delta = -loss, source = FoodChangeSource.Damage });
 ```
 
 **2. `GameManager` stops knowing the UI exists.** The `GameObject.Find` calls and every `levelText`/`levelImage` reference go away, replaced by two announcements:
 
 ```csharp
 // InitGame
-Broadcaster.Emit(new LevelStarted { Level = level });
+Broadcaster.Emit(new LevelStarted { level = level });
 // GameOver
-Broadcaster.Emit(new RunEnded { Level = level });
+Broadcaster.Emit(new RunEnded { level = level });
 ```
 
-**3. A `GameHUD` listens and owns presentation.** It subscribes to the three signals, holds the scene references (assigned in the inspector, not looked up by name), and decides all formatting, including the "quiet on moves" rule, expressed cleanly against `Source` instead of guessed from the delta:
+**3. A `GameHUD` listens and owns presentation.** It subscribes to the three signals, holds the scene references (assigned in the inspector, not looked up by name), and decides all formatting, including the "quiet on moves" rule, expressed cleanly against `source` instead of guessed from the delta:
 
 ```csharp
 private void OnFoodChanged(FoodChanged signal)
 {
-    if (signal.Source == FoodChangeSource.Move)
-        foodText.text = "Food: " + signal.Current;
+    if (signal.source == FoodChangeSource.Move)
+        foodText.text = "Food: " + signal.current;
     else
-        foodText.text = (signal.Delta >= 0 ? "+" : "") + signal.Delta + " Food: " + signal.Current;
+        foodText.text = (signal.delta >= 0 ? "+" : "") + signal.delta + " Food: " + signal.current;
 }
 ```
 
@@ -272,7 +272,7 @@ Turn the verb into a type, and let whoever owns the action **handle** it. The ca
 
 ```csharp
 Broadcaster.Order(new EndRun());
-Broadcaster.Order(new DamagePlayer { Amount = playerDamage });
+Broadcaster.Order(new DamagePlayer { amount = playerDamage });
 ```
 
 The `ICommand` contract is *exactly one handler*, and that's a promise the developer makes to everyone else: there is **one** authoritative implementation of "end the run", a second registration is refused, and it can't be quietly bypassed. The designer's entire vocabulary for ending the run collapses to a single type name (no reference, no singleton, no method to look up).
@@ -287,10 +287,10 @@ This is also where the *kind you pick is a permission*. A signal says "you may r
 [Event("End the current run (starvation, a lethal tile, a debug shortcut, ...).")]
 public struct EndRun : ICommand { }
 
-[Event("Damage the player, reducing its food by Amount.")]
+[Event("Damage the player, reducing its food by amount.")]
 public struct DamagePlayer : ICommand
 {
-    public int Amount;
+    public int amount;
 }
 ```
 
@@ -331,7 +331,7 @@ public class TrapTile : MonoBehaviour
 {
     public int amount = 5;
     private void OnTriggerEnter2D(Collider2D other)
-        => Broadcaster.Order(new DamagePlayer { Amount = amount });
+        => Broadcaster.Order(new DamagePlayer { amount = amount });
 }
 ```
 
