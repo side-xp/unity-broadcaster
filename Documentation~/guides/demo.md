@@ -32,7 +32,7 @@ The concept come from an [old Unity tutorial](https://learn.unity.com/course/int
 
 ## Reworking with Broadcaster
 
-Broadcaster lets a system announce *that something happened*, or *ask another system to do something*, without holding a reference to whoever handles it. Systems no longer wire themselves to each other. Instead, they exchange **events**, and the *kind* of event you pick (a signal, a command, a request, a cue) is a deliberate contract about what a listener is allowed to do with it.
+Broadcaster lets a system announce *that something happened*, or *ask another system to do something*, without holding a reference to whoever handles it. Systems no longer wire themselves to each other. Instead, they exchange **events**, and the *kind* of event you pick (a [signal](#signals---making-the-audio-system-independent), a [command](#commands---giving-the-designer-verbs), a request, a cue) is a deliberate contract about what a listener is allowed to do with it.
 
 The rework introduces those kinds one at a time, each solving a concrete coupling problem in the original tutorial code. Each section presents a problem, then shows how Broadcaster features solve it.
 
@@ -238,3 +238,101 @@ With this in place, `PlayerAte` now has one listener (the sound from the previou
 There's a rough edge on purpose. `FoodChanged` only fires on a *change*, so a HUD that comes up at the start of a level has nothing to show until the player's first move — the initial food total has nowhere to come from. `Player.Start` used to set that text directly; now it can't, and emitting a fake "change" of zero to seed it would be dishonest.
 
 That gap is the hook into the next real problem. The food total isn't an event: it's **state**, something a newly-spawned listener should be able to *ask for*, not wait to be told about. That's what providers are for, and it's where we go next.
+
+## Commands - Giving the verbs
+
+A **command** (`ICommand`) is an order, performed by **exactly one** handler. Where a signal announces *what happened* and lets anyone (or no one) react, a command names *something to be done* and expects one authoritative party to do it. That "exactly one" isn't a limitation to work around, it's the whole contract.
+
+### The problem
+
+Two spots where gameplay reaches through a concrete type to make something happen.
+
+Ending the run, from `Player`:
+
+```csharp
+// Original Player.CheckIfGameOver
+GameManager.instance.GameOver();
+```
+
+To end the run, `Player` has to know `GameManager` exists, that it's a singleton, what its method is called, and compile against it. Anyone who wants "stepping on a lava tile ends the run" can't express that without writing gameplay code.
+
+Hurting the player, from `Enemy`:
+
+```csharp
+// Original Enemy.OnCantMove
+Player hitPlayer = component as Player;
+hitPlayer.LoseFood(playerDamage);
+```
+
+Anything that wants to damage the player must first *find a Player* and know its API. The enemy is coupled to the player's concrete type just to subtract some food.
+
+### Broadcaster's solution
+
+Turn the verb into a type, and let whoever owns the action **handle** it. The caller orders the command, it never learns who performs it or how.
+
+```csharp
+Broadcaster.Order(new EndRun());
+Broadcaster.Order(new DamagePlayer { Amount = playerDamage });
+```
+
+The `ICommand` contract is *exactly one handler*, and that's a promise the developer makes to everyone else: there is **one** authoritative implementation of "end the run", a second registration is refused, and it can't be quietly bypassed. The designer's entire vocabulary for ending the run collapses to a single type name (no reference, no singleton, no method to look up).
+
+This is also where the *kind you pick is a permission*. A signal says "you may react to this." A command says "you may trigger this verb, but you don't get to know or change how it's done." Handing a designer `EndRun` is safe in a way that handing them `GameManager` is not.
+
+### The implementation
+
+**1. Declare the commands.** Small types, like signals, but implementing `ICommand`:
+
+```csharp
+[Event("End the current run (starvation, a lethal tile, a debug shortcut, ...).")]
+public struct EndRun : ICommand { }
+
+[Event("Damage the player, reducing its food by Amount.")]
+public struct DamagePlayer : ICommand
+{
+    public int Amount;
+}
+```
+
+**2. Register the one handler,** with `Obey`. `GameManager` becomes the authority on ending the run, and `Player` on taking damage:
+
+```csharp
+// GameManager
+Broadcaster.Obey<EndRun>(this, OnEndRun);
+// Player
+Broadcaster.Obey<DamagePlayer>(this, OnDamagePlayer);
+```
+
+The old public `GameOver()` and `LoseFood()` methods become these private handlers. Nobody calls them by name anymore.
+
+**3. Order the command** where the old call used to be. `Player.CheckIfGameOver` orders `EndRun`. `Enemy.OnCantMove` orders `DamagePlayer` and drops its `Player` cast entirely.
+
+> **Registering the single handler over an object's lifetime.** A handler is owned, so it's registered and released with its owner. `Player` does it in `OnEnable`/`OnDisable` (it's rebuilt every level), and because the outgoing player releases before the incoming one registers, the "exactly one" rule holds across a scene reload. `GameManager` uses `Awake`/`OnDestroy` instead, deliberately *not* `OnEnable`/`OnDisable`, because it flips its own `enabled` off at game-over, and an `OnDisable` release would drop the `EndRun` handler exactly when the run is ending.
+
+### The contract: silence versus error
+
+Signals and commands fail in opposite ways, and both are correct.
+
+- An **unhandled signal is silence.** Nobody listening for `PlayerMoved`? Nothing happens, and that's fine. The emitter never cared.
+- An **unhandled command is a loud error.** `Order`-ing `EndRun` with no handler logs an error (in the editor and development builds) and reports the command as unperformed.
+
+The asymmetry is the point: nobody caring that the player moved is normal, but nobody performing "end the run" is a bug, and the bus treats it as one. Registering a *second* handler for a command is refused the same way: the first stays authoritative, so a command can never fork into two conflicting implementations.
+
+### The designer payoff
+
+Two concrete wins, neither hypothetical.
+
+**Test game-over without dying.** Open the **Events** window (`Tools/Sideways Experiments/Broadcaster/Events`) in play mode, find `EndRun`, and fire it. The game-over screen appears, no starving first. Because the whole action is reachable through one type, the tooling can drive it directly, and so anyone in the team can.
+
+**Author a hazard with zero gameplay knowledge.** A `TrapTile` that ends a turn on the player's food is now a few lines that mention *nothing* about `Player`:
+
+```csharp
+public class TrapTile : MonoBehaviour
+{
+    public int amount = 5;
+    private void OnTriggerEnter2D(Collider2D other)
+        => Broadcaster.Order(new DamagePlayer { Amount = amount });
+}
+```
+
+There's no `Player` to find, no API to learn, no reference to wire. The command *is* the interface, and it's the narrow, safe one the developer chose to expose.
