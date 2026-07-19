@@ -1,3 +1,4 @@
+#pragma warning disable IDE1006 // Naming Styles, disabled for demo
 using UnityEngine;
 
 namespace SideXP.Broadcaster.Scavengers
@@ -58,13 +59,13 @@ namespace SideXP.Broadcaster.Scavengers
     public struct FoodChanged : ISignal
     {
         /// <summary>The player's food total after the change.</summary>
-        public int Current;
+        public int current;
 
         /// <summary>The signed amount the total just changed by (negative for a move or damage, positive for a pickup).</summary>
-        public int Delta;
+        public int delta;
 
         /// <summary>What caused the change.</summary>
-        public FoodChangeSource Source;
+        public FoodChangeSource source;
     }
 
     /// <summary>
@@ -74,7 +75,7 @@ namespace SideXP.Broadcaster.Scavengers
     public struct LevelStarted : ISignal
     {
         /// <summary>The 1-based number of the level that just started.</summary>
-        public int Level;
+        public int level;
     }
 
     /// <summary>
@@ -84,7 +85,7 @@ namespace SideXP.Broadcaster.Scavengers
     public struct RunEnded : ISignal
     {
         /// <summary>The level the player had reached when the run ended.</summary>
-        public int Level;
+        public int level;
     }
 
     /// <summary>
@@ -100,7 +101,7 @@ namespace SideXP.Broadcaster.Scavengers
     public struct DamagePlayer : ICommand
     {
         /// <summary>How much food the damage costs the player.</summary>
-        public int Amount;
+        public int amount;
     }
 
     /// <summary>
@@ -110,9 +111,9 @@ namespace SideXP.Broadcaster.Scavengers
     public struct AdjustFood : ICommand
     {
         /// <summary>The signed amount to change the food total by.</summary>
-        public int Delta;
+        public int delta;
         /// <summary>What caused the change.</summary>
-        public FoodChangeSource Source;
+        public FoodChangeSource source;
     }
 
     /// <summary>
@@ -128,7 +129,7 @@ namespace SideXP.Broadcaster.Scavengers
     public struct PlayerTurn : ISignal
     {
         /// <summary>True while the player may act.</summary>
-        public bool Active;
+        public bool active;
     }
 
     /// <summary>
@@ -138,6 +139,7 @@ namespace SideXP.Broadcaster.Scavengers
     public struct PlayerPosition : ISignal
     {
         /// <summary>The player's position right now.</summary>
-        public Vector3 Position;
+        public Vector3 position;
     }
 }
+#pragma warning restore IDE1006 // Naming Styles

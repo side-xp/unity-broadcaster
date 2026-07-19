@@ -54,13 +54,13 @@ namespace SideXP.Broadcaster.Scavengers
             int yDir = 0;
 
             // If this entity and the player are on the same column
-            if (Mathf.Abs(player.Position.x - transform.position.x) < float.Epsilon)
+            if (Mathf.Abs(player.position.x - transform.position.x) < float.Epsilon)
                 // Make this entity move vertically
-                yDir = player.Position.y > transform.position.y ? 1 : -1;
+                yDir = player.position.y > transform.position.y ? 1 : -1;
             // Otherwise
             else
                 // Make this entity move horizontally
-                xDir = player.Position.x > transform.position.x ? 1 : -1;
+                xDir = player.position.x > transform.position.x ? 1 : -1;
 
             // Try to move in the computed direction
             AttemptMove<Player>(xDir, yDir);
@@ -70,7 +70,7 @@ namespace SideXP.Broadcaster.Scavengers
         protected override void OnCantMove<T>(T component)
         {
             // Order the damage instead of reaching into the player's API (the enemy doesn't even need to know Player exists)
-            Broadcaster.Order(new DamagePlayer { Amount = playerDamage });
+            Broadcaster.Order(new DamagePlayer { amount = playerDamage });
             // Play feedback
             animator.SetTrigger("attack");
             Broadcaster.Emit(new EnemyAttacked());

@@ -40,15 +40,15 @@ namespace SideXP.Broadcaster.Scavengers
         private void OnFoodChanged(FoodChanged signal)
         {
             // A move is the routine turn cost, so keep it quiet; pickups and damage get an explicit +/- badge.
-            if (signal.Source == FoodChangeSource.Move)
-                foodText.text = "Food: " + signal.Current;
+            if (signal.source == FoodChangeSource.Move)
+                foodText.text = "Food: " + signal.current;
             else
-                foodText.text = (signal.Delta >= 0 ? "+" : "") + signal.Delta + " Food: " + signal.Current;
+                foodText.text = (signal.delta >= 0 ? "+" : "") + signal.delta + " Food: " + signal.current;
         }
 
         private void OnLevelStarted(LevelStarted signal)
         {
-            levelText.text = "Day " + signal.Level;
+            levelText.text = "Day " + signal.level;
             levelImage.SetActive(true);
             Invoke(nameof(HideLevelImage), levelStartDelay);
         }
@@ -57,7 +57,7 @@ namespace SideXP.Broadcaster.Scavengers
         {
             // The run is over: keep the overlay up, so cancel any pending hide from the level card.
             CancelInvoke(nameof(HideLevelImage));
-            levelText.text = "After " + signal.Level + " days, you starved.";
+            levelText.text = "After " + signal.level + " days, you starved.";
             levelImage.SetActive(true);
         }
 

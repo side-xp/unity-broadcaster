@@ -39,7 +39,7 @@ namespace SideXP.Broadcaster.Scavengers
             // Become the single authority on damaging the player: anything can hurt it by ordering DamagePlayer
             Broadcaster.Obey<DamagePlayer>(this, OnDamagePlayer);
             // Expose the player's position as state anyone can read (the enemies use it to path toward the player)
-            Broadcaster.Provide<PlayerPosition>(this, () => new PlayerPosition { Position = transform.position });
+            Broadcaster.Provide<PlayerPosition>(this, () => new PlayerPosition { position = transform.position });
             // Follow the turn flag by push instead of polling every frame; init pulls its current value right now
             Broadcaster.Subscribe<PlayerTurn>(this, OnPlayerTurn, init: true);
         }
@@ -77,7 +77,7 @@ namespace SideXP.Broadcaster.Scavengers
         protected override void AttemptMove<T>(int xDir, int yDir)
         {
             // Spend a food point on the move; the food owner applies it and detects starvation
-            Broadcaster.Order(new AdjustFood { Delta = -1, Source = FoodChangeSource.Move });
+            Broadcaster.Order(new AdjustFood { delta = -1, source = FoodChangeSource.Move });
 
             base.AttemptMove<T>(xDir, yDir);
 
@@ -110,7 +110,7 @@ namespace SideXP.Broadcaster.Scavengers
             else if (other.TryGetComponent(out Collectible collectible))
             {
                 // The food owner applies the gain; the audio signals below stay separate feedback
-                Broadcaster.Order(new AdjustFood { Delta = collectible.points, Source = FoodChangeSource.Pickup });
+                Broadcaster.Order(new AdjustFood { delta = collectible.points, source = FoodChangeSource.Pickup });
 
                 // Emit what happened; the audio system decides how each kind of pickup sounds
                 if (collectible.kind == CollectibleKind.Food)
@@ -138,7 +138,7 @@ namespace SideXP.Broadcaster.Scavengers
         {
             animator.SetTrigger("hit");
             // The food owner applies the loss and decides whether it was fatal
-            Broadcaster.Order(new AdjustFood { Delta = -command.Amount, Source = FoodChangeSource.Damage });
+            Broadcaster.Order(new AdjustFood { delta = -command.amount, source = FoodChangeSource.Damage });
         }
 
         /// <summary>
@@ -146,7 +146,7 @@ namespace SideXP.Broadcaster.Scavengers
         /// </summary>
         private void OnPlayerTurn(PlayerTurn signal)
         {
-            myTurn = signal.Active;
+            myTurn = signal.active;
         }
     }
 }

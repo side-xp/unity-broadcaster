@@ -29,7 +29,8 @@ namespace SideXP.Broadcaster.Scavengers
         [Tooltip("The delay (in seconds) between each player turn.")]
         public float turnDelay = 0.1f;
 
-        /// <summary>Flag enabled if it's currently the player's turn. Owned here and exposed as provided <see cref="PlayerTurn"/> state.</summary>
+        /// <summary>Flag enabled if it's currently the player's turn. Owned here and exposed as provided <see cref="PlayerTurn"/>
+        /// state.</summary>
         private bool playersTurn = true;
 
         private BoardManager boardScript;
@@ -68,8 +69,8 @@ namespace SideXP.Broadcaster.Scavengers
             // Own the food total and the turn flag as state: accept the orders that change them, and provide their current value
             Broadcaster.Obey<AdjustFood>(this, OnAdjustFood);
             Broadcaster.Obey<EndPlayerTurn>(this, OnEndPlayerTurn);
-            Broadcaster.Provide<FoodChanged>(this, () => new FoodChanged { Current = playerFoodPoints, Source = FoodChangeSource.Move });
-            Broadcaster.Provide<PlayerTurn>(this, () => new PlayerTurn { Active = playersTurn });
+            Broadcaster.Provide<FoodChanged>(this, () => new FoodChanged { current = playerFoodPoints, source = FoodChangeSource.Move });
+            Broadcaster.Provide<PlayerTurn>(this, () => new PlayerTurn { active = playersTurn });
         }
 
         private void Update()
@@ -105,7 +106,7 @@ namespace SideXP.Broadcaster.Scavengers
             doingSetup = true;
 
             // Announce the new level; the UI owns the level card and how long it stays up
-            Broadcaster.Emit(new LevelStarted { Level = level });
+            Broadcaster.Emit(new LevelStarted { level = level });
             Invoke(nameof(EndSetup), levelStartDelay);
 
             // Reset board
@@ -135,7 +136,7 @@ namespace SideXP.Broadcaster.Scavengers
         /// </summary>
         private void OnEndRun(EndRun command)
         {
-            Broadcaster.Emit(new RunEnded { Level = level });
+            Broadcaster.Emit(new RunEnded { level = level });
             enabled = false;
         }
 
@@ -144,8 +145,8 @@ namespace SideXP.Broadcaster.Scavengers
         /// </summary>
         private void OnAdjustFood(AdjustFood command)
         {
-            playerFoodPoints += command.Delta;
-            Broadcaster.Emit(new FoodChanged { Current = playerFoodPoints, Delta = command.Delta, Source = command.Source });
+            playerFoodPoints += command.delta;
+            Broadcaster.Emit(new FoodChanged { current = playerFoodPoints, delta = command.delta, source = command.source });
 
             if (playerFoodPoints <= 0)
             {
@@ -168,7 +169,7 @@ namespace SideXP.Broadcaster.Scavengers
         private void SetPlayersTurn(bool active)
         {
             playersTurn = active;
-            Broadcaster.Emit(new PlayerTurn { Active = active });
+            Broadcaster.Emit(new PlayerTurn { active = active });
         }
 
         /// <summary>
