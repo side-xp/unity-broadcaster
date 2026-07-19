@@ -141,5 +141,11 @@ namespace SideXP.Broadcaster.Scavengers
         /// <summary>The player's position right now.</summary>
         public Vector3 position;
     }
+
+    /// <summary>
+    /// The enemies' turn. Every enemy performs its move or attack, and the turn manager waits for all of them.
+    /// </summary>
+    [Event("The enemies' turn: every enemy performs, and the game waits for all of them to finish.")]
+    public struct EnemyTurn : ICue { }
 }
 #pragma warning restore IDE1006 // Naming Styles

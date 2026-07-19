@@ -12,6 +12,10 @@ PrefabInstance:
       propertyPath: playerDamage
       value: 20
       objectReference: {fileID: 0}
+    - target: {fileID: 1994250642993123500, guid: 90c97efe14836104397a259bacd815fc, type: 3}
+      propertyPath: moveTime
+      value: 0.3
+      objectReference: {fileID: 0}
     - target: {fileID: 2518658463243460960, guid: 90c97efe14836104397a259bacd815fc, type: 3}
       propertyPath: m_Sprite
       value: 

@@ -1,6 +1,5 @@
 #pragma warning disable IDE1006 // Naming Styles, disabled for demo
-using System.Collections;
-using System.Collections.Generic;
+using System;
 
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -34,7 +33,6 @@ namespace SideXP.Broadcaster.Scavengers
         private bool playersTurn = true;
 
         private BoardManager boardScript;
-        private List<Enemy> enemies;
 
         /// <summary>Current level number.</summary>
         private int level = 0;
@@ -59,7 +57,6 @@ namespace SideXP.Broadcaster.Scavengers
 
             DontDestroyOnLoad(gameObject);
 
-            enemies = new List<Enemy>();
             boardScript = GetComponent<BoardManager>();
             SceneManager.sceneLoaded += OnSceneLoaded;
 
@@ -79,7 +76,7 @@ namespace SideXP.Broadcaster.Scavengers
             if (playersTurn || enemiesMoving || doingSetup)
                 return;
 
-            StartCoroutine(MoveEnemies());
+            RunEnemyTurn();
         }
 
         private void OnDestroy()
@@ -114,7 +111,6 @@ namespace SideXP.Broadcaster.Scavengers
             Invoke(nameof(EndSetup), levelStartDelay);
 
             // Reset board
-            enemies.Clear();
             boardScript.SetupScene(level);
         }
 
@@ -125,15 +121,6 @@ namespace SideXP.Broadcaster.Scavengers
         {
             doingSetup = false;
         }
-
-        /// <summary>
-        /// Adds a given enemy instance to the list.
-        /// </summary>
-        public void AddEnemyToList(Enemy script)
-        {
-            enemies.Add(script);
-        }
-
 
         /// <summary>
         /// Handles the <see cref="EndRun"/> command: announces the run's end and disables this game manager.
@@ -177,27 +164,27 @@ namespace SideXP.Broadcaster.Scavengers
         }
 
         /// <summary>
-        /// Coroutine to move enemies in sequence.
+        /// Runs the enemies' turn: sends the <see cref="EnemyTurn"/> cue and waits for every enemy to finish (when-all), then hands the
+        /// turn back to the player. It waits for the performers' real completion, not a guessed per-enemy duration.
         /// </summary>
-        private IEnumerator MoveEnemies()
+        private async void RunEnemyTurn()
         {
-            // Mark sequence started
+            // Set synchronously (before the first await) so Update doesn't start a second enemy turn
             enemiesMoving = true;
 
-            yield return new WaitForSeconds(turnDelay);
-
-            // Apply simple delay if there's no enemy to move
-            if (enemies.Count == 0)
-                yield return new WaitForSeconds(turnDelay);
-
-            // For each enemy on the board, make it move and wait a short delay
-            for (int i = 0; i < enemies.Count; i++)
+            try
             {
-                enemies[i].MoveEnemy();
-                yield return new WaitForSeconds(enemies[i].moveTime);
+                // A short beat before the enemies act
+                await Awaitable.WaitForSecondsAsync(turnDelay, destroyCancellationToken);
+                // Wait for every enemy performer to finish its move or attack
+                await Broadcaster.Cue(new EnemyTurn(), destroyCancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // Play mode exited, or this manager was destroyed mid-turn
+                return;
             }
 
-            // Clear sequence
             SetPlayersTurn(true);
             enemiesMoving = false;
         }

@@ -22,13 +22,15 @@ namespace SideXP.Broadcaster.Scavengers
         }
 
         /// <summary>
-        /// Makes this entity move in a given direction, or returns false if the movement is not possible.
+        /// Checks whether this entity can move in a given direction. Outputs the destination tile and whatever blocks the move (if any),
+        /// without starting any movement — so a caller can decide to slide there and wait for it, or react to the blocker.
         /// </summary>
-        /// <param name="hit">The object that blocked the movement.</param>
-        protected bool Move(int xDir, int yDir, out RaycastHit2D hit)
+        /// <param name="end">The destination tile if the move is possible.</param>
+        /// <param name="hit">The object that blocks the movement, if any.</param>
+        protected bool CanMove(int xDir, int yDir, out Vector2 end, out RaycastHit2D hit)
         {
             Vector2 start = transform.position;
-            Vector2 end = start + new Vector2(xDir, yDir);
+            end = start + new Vector2(xDir, yDir);
 
             // Only solid tiles (walls, characters) can block a move; triggers (collectibles, the exit) are ignored.
             ContactFilter2D filter = new ContactFilter2D { useTriggers = false };
@@ -41,15 +43,20 @@ namespace SideXP.Broadcaster.Scavengers
             boxCollider.enabled = true;
 
             hit = count > 0 ? hits[0] : default;
+            return hit.transform == null;
+        }
 
-            // If the target position is free, move
-            if (hit.transform == null)
-            {
-                StartCoroutine(SmoothMovement(end));
-                return true;
-            }
+        /// <summary>
+        /// Makes this entity move in a given direction, or returns false if the movement is not possible.
+        /// </summary>
+        /// <param name="hit">The object that blocked the movement.</param>
+        protected bool Move(int xDir, int yDir, out RaycastHit2D hit)
+        {
+            if (!CanMove(xDir, yDir, out Vector2 end, out hit))
+                return false;
 
-            return false;
+            StartCoroutine(SmoothMovement(end));
+            return true;
         }
 
         /// <summary>
@@ -92,11 +99,12 @@ namespace SideXP.Broadcaster.Scavengers
         }
 
         /// <summary>
-        /// Called when the movement is blocked this turn.
+        /// Called when the movement is blocked this turn. The default does nothing; override it to react to the blocker.
         /// </summary>
         /// <param name="component">The unit or object that blocked the movement.</param>
-        protected abstract void OnCantMove<T>(T component)
-            where T : Component;
+        protected virtual void OnCantMove<T>(T component)
+            where T : Component
+        { }
     }
 }
 #pragma warning restore IDE1006 // Naming Styles
