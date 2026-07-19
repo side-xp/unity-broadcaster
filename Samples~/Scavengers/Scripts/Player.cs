@@ -36,12 +36,17 @@ namespace SideXP.Broadcaster.Scavengers
         private void OnEnable()
         {
             moveAction.Enable();
-            // Become the single authority on damaging the player: anything can hurt it by ordering DamagePlayer
-            Broadcaster.Obey<DamagePlayer>(this, OnDamagePlayer);
+            // Become the single authority on damaging the player: anything can hurt it by ordering DamagePlayer.
+            // The food owner applies the loss and decides whether it was fatal.
+            Broadcaster.Obey<DamagePlayer>(this, command =>
+            {
+                animator.SetTrigger("hit");
+                Broadcaster.Order(new AdjustFood { delta = -command.amount, source = FoodChangeSource.Damage });
+            });
             // Expose the player's position as state anyone can read (the enemies use it to path toward the player)
             Broadcaster.Provide<PlayerPosition>(this, () => new PlayerPosition { position = transform.position });
             // Follow the turn flag by push instead of polling every frame; init pulls its current value right now
-            Broadcaster.Subscribe<PlayerTurn>(this, OnPlayerTurn, init: true);
+            Broadcaster.Subscribe<PlayerTurn>(this, signal => myTurn = signal.active, init: true);
         }
 
         private void OnDisable()
@@ -131,23 +136,6 @@ namespace SideXP.Broadcaster.Scavengers
             SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
         }
 
-        /// <summary>
-        /// Handles the <see cref="DamagePlayer"/> command: plays the hit reaction and orders the food loss.
-        /// </summary>
-        private void OnDamagePlayer(DamagePlayer command)
-        {
-            animator.SetTrigger("hit");
-            // The food owner applies the loss and decides whether it was fatal
-            Broadcaster.Order(new AdjustFood { delta = -command.amount, source = FoodChangeSource.Damage });
-        }
-
-        /// <summary>
-        /// Caches the turn state pushed by the <see cref="GameManager"/>.
-        /// </summary>
-        private void OnPlayerTurn(PlayerTurn signal)
-        {
-            myTurn = signal.active;
-        }
     }
 }
 #pragma warning restore IDE1006 // Naming Styles

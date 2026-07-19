@@ -31,7 +31,7 @@ namespace SideXP.Broadcaster.Scavengers
         private void OnEnable()
         {
             // Join the enemy-turn cue. The set of performers IS the roster of live enemies, there's no separate list to maintain.
-            Broadcaster.Perform<EnemyTurn>(this, PerformTurn);
+            Broadcaster.Perform<EnemyTurn>(this, (_, done) => StartCoroutine(TurnRoutine(done)));
         }
 
         private void OnDisable()
@@ -40,14 +40,9 @@ namespace SideXP.Broadcaster.Scavengers
         }
 
         /// <summary>
-        /// Performs this enemy's turn as a cue performer. It reports <paramref name="done"/> only once the move or attack has actually
+        /// The <see cref="EnemyTurn"/> performer: moves or attacks, and calls <paramref name="done"/> only once the action has actually
         /// finished, so the turn manager's when-all waits for the real animation instead of a guessed duration.
         /// </summary>
-        private void PerformTurn(EnemyTurn cue, Action done)
-        {
-            StartCoroutine(TurnRoutine(done));
-        }
-
         private IEnumerator TurnRoutine(Action done)
         {
             // This enemy only acts every other turn

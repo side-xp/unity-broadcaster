@@ -59,29 +59,23 @@ namespace SideXP.Broadcaster.Scavengers
             if (instance != this)
                 return;
 
-            Broadcaster.Subscribe<PlayerMoved>(this, OnPlayerMoved);
-            Broadcaster.Subscribe<PlayerAte>(this, OnPlayerAte);
-            Broadcaster.Subscribe<PlayerDrank>(this, OnPlayerDrank);
-            Broadcaster.Subscribe<WallChopped>(this, OnWallChopped);
-            Broadcaster.Subscribe<EnemyAttacked>(this, OnEnemyAttacked);
-            Broadcaster.Subscribe<PlayerDied>(this, OnPlayerDied);
+            // Registrations are released by owner in OnDisable (UnregisterAll), so the callbacks never need a stable
+            // reference to unsubscribe by; each one is just an inline lambda.
+            Broadcaster.Subscribe<PlayerMoved>(this, _ => RandomizeSfx(moveSound1, moveSound2));
+            Broadcaster.Subscribe<PlayerAte>(this, _ => RandomizeSfx(eatSound1, eatSound2));
+            Broadcaster.Subscribe<PlayerDrank>(this, _ => RandomizeSfx(drinkSound1, drinkSound2));
+            Broadcaster.Subscribe<WallChopped>(this, _ => RandomizeSfx(chopSound1, chopSound2));
+            Broadcaster.Subscribe<EnemyAttacked>(this, _ => RandomizeSfx(enemyAttackSound1, enemyAttackSound2));
+            Broadcaster.Subscribe<PlayerDied>(this, _ =>
+            {
+                PlaySingle(gameOverSound);
+                musicSource.Stop();
+            });
         }
 
         private void OnDisable()
         {
             Broadcaster.UnregisterAll(this);
-        }
-
-        private void OnPlayerMoved(PlayerMoved signal) => RandomizeSfx(moveSound1, moveSound2);
-        private void OnPlayerAte(PlayerAte signal) => RandomizeSfx(eatSound1, eatSound2);
-        private void OnPlayerDrank(PlayerDrank signal) => RandomizeSfx(drinkSound1, drinkSound2);
-        private void OnWallChopped(WallChopped signal) => RandomizeSfx(chopSound1, chopSound2);
-        private void OnEnemyAttacked(EnemyAttacked signal) => RandomizeSfx(enemyAttackSound1, enemyAttackSound2);
-
-        private void OnPlayerDied(PlayerDied signal)
-        {
-            PlaySingle(gameOverSound);
-            musicSource.Stop();
         }
 
         /// <summary>

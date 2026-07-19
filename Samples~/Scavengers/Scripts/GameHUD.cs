@@ -29,12 +29,22 @@ namespace SideXP.Broadcaster.Scavengers
 
         private void OnEnable()
         {
-            // init: true pulls the current food from its provider right away, so the counter shows a value on level start
+            // init: true pulls the current food from its provider right away, so the counter shows a value on level start.
+            // OnFoodChanged stays a named method (it has real formatting logic); the rest are inline lambdas.
             Broadcaster.Subscribe<FoodChanged>(this, OnFoodChanged, init: true);
-            Broadcaster.Subscribe<LevelStarted>(this, OnLevelStarted);
-            Broadcaster.Subscribe<RunEnded>(this, OnRunEnded);
+            Broadcaster.Subscribe<LevelStarted>(this, signal =>
+            {
+                levelText.text = "Day " + signal.level;
+                levelImage.SetActive(true);
+            });
+            Broadcaster.Subscribe<RunEnded>(this, signal =>
+            {
+                // The run is over: raise the overlay and keep it up (no intro performer is running to hide it)
+                levelText.text = "After " + signal.level + " days, you starved.";
+                levelImage.SetActive(true);
+            });
             // Perform the level intro: the game waits on this, so the UI owns how long the card stays up
-            Broadcaster.Perform<LevelIntro>(this, PerformLevelIntro);
+            Broadcaster.Perform<LevelIntro>(this, (_, done) => StartCoroutine(LevelIntroRoutine(done)));
         }
 
         private void OnDisable()
@@ -51,28 +61,10 @@ namespace SideXP.Broadcaster.Scavengers
                 foodText.text = (signal.delta >= 0 ? "+" : "") + signal.delta + " Food: " + signal.current;
         }
 
-        private void OnLevelStarted(LevelStarted signal)
-        {
-            levelText.text = "Day " + signal.level;
-            levelImage.SetActive(true);
-        }
-
-        private void OnRunEnded(RunEnded signal)
-        {
-            // The run is over: raise the overlay and keep it up (no intro performer is running to hide it).
-            levelText.text = "After " + signal.level + " days, you starved.";
-            levelImage.SetActive(true);
-        }
-
         /// <summary>
-        /// Performs the <see cref="LevelIntro"/> cue: holds the level card up for its duration, then hides it. Setup waits for this
-        /// to finish, so this component alone decides how long the intro lasts.
+        /// The <see cref="LevelIntro"/> performer: holds the level card up for its duration, then hides it. Setup waits for this to
+        /// finish, so this component alone decides how long the intro lasts.
         /// </summary>
-        private void PerformLevelIntro(LevelIntro cue, Action done)
-        {
-            StartCoroutine(LevelIntroRoutine(done));
-        }
-
         private IEnumerator LevelIntroRoutine(Action done)
         {
             yield return new WaitForSeconds(levelStartDelay);

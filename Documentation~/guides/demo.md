@@ -109,9 +109,9 @@ if (Move(xDir, yDir, out hit))
 ```csharp
 private void OnEnable()
 {
-    Broadcaster.Subscribe<PlayerMoved>(this, OnPlayerMoved);
-    Broadcaster.Subscribe<PlayerAte>(this, OnPlayerAte);
-    // …one Subscribe per signal
+    Broadcaster.Subscribe<PlayerMoved>(this, _ => RandomizeSfx(moveSound1, moveSound2));
+    Broadcaster.Subscribe<PlayerAte>(this, _ => RandomizeSfx(eatSound1, eatSound2));
+    // …one Subscribe per signal, each a small inline lambda
 }
 
 private void OnDisable()
@@ -119,8 +119,6 @@ private void OnDisable()
     // The blessed one-liner: drop every registration owned by this object.
     Broadcaster.UnregisterAll(this);
 }
-
-private void OnPlayerMoved(PlayerMoved signal) => RandomizeSfx(moveSound1, moveSound2);
 ```
 
 The `musicSource.Stop()` that used to live in `Player` moves here too, into the `PlayerDied` handler where it belongs — stopping the music is the audio system's business, not the player's.
@@ -297,13 +295,22 @@ public struct DamagePlayer : ICommand
 **2. Register the one handler,** with `Obey`. `GameManager` becomes the authority on ending the run, and `Player` on taking damage:
 
 ```csharp
-// GameManager
-Broadcaster.Obey<EndRun>(this, OnEndRun);
-// Player
-Broadcaster.Obey<DamagePlayer>(this, OnDamagePlayer);
+// GameManager, the sole handler that ends the run
+Broadcaster.Obey<EndRun>(this, _ =>
+{
+    Broadcaster.Emit(new RunEnded { level = level });
+    enabled = false;
+});
+
+// Player, the sole handler that damages the player (what LoseFood used to do)
+Broadcaster.Obey<DamagePlayer>(this, command =>
+{
+    animator.SetTrigger("hit");
+    food -= command.amount; // then refresh the HUD and check for game over
+});
 ```
 
-The old public `GameOver()` and `LoseFood()` methods become these private handlers. Nobody calls them by name anymore.
+The old public `GameOver()` and `LoseFood()` methods fold straight into these handlers. Nobody calls them by name anymore.
 
 **3. Order the command** where the old call used to be. `Player.CheckIfGameOver` orders `EndRun`. `Enemy.OnCantMove` orders `DamagePlayer` and drops its `Player` cast entirely.
 
@@ -409,7 +416,7 @@ That's the read mechanism. The reliable *seed* at level start comes from the own
 // GameManager
 Broadcaster.Provide<PlayerTurn>(this, () => new PlayerTurn { active = playersTurn });
 // Player (cache the pushed value instead of polling every frame)
-Broadcaster.Subscribe<PlayerTurn>(this, OnPlayerTurn, init: true);
+Broadcaster.Subscribe<PlayerTurn>(this, signal => myTurn = signal.active, init: true);
 ```
 
 `Player` can no longer *write* the flag, that was the point. To end its turn it orders a command, and `GameManager`, the owner, flips the state and emits the new value:
@@ -493,10 +500,10 @@ Nothing here knows how many performers there are, how long each takes, or what t
 
 ```csharp
 // Enemy
-private void OnEnable() => Broadcaster.Perform<EnemyTurn>(this, PerformTurn);
+private void OnEnable() => Broadcaster.Perform<EnemyTurn>(this, (_, done) => StartCoroutine(TurnRoutine(done)));
 private void OnDisable() => Broadcaster.UnregisterAll(this);
 
-// PerformTurn starts this coroutine, handed a `done` callback to call when it's finished
+// Starts this coroutine, handed a `done` to call when it's finished
 private IEnumerator TurnRoutine(Action done)
 {
     // …decide a direction toward the player…

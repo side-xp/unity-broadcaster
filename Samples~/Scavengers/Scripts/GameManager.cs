@@ -58,11 +58,16 @@ namespace SideXP.Broadcaster.Scavengers
             SceneManager.sceneLoaded += OnSceneLoaded;
 
             // Become the single authority that ends the run. Anything can end it by ordering EndRun, without a reference here.
-            Broadcaster.Obey<EndRun>(this, OnEndRun);
+            Broadcaster.Obey<EndRun>(this, _ =>
+            {
+                Broadcaster.Emit(new RunEnded { level = level });
+                enabled = false;
+            });
 
-            // Own the food total and the turn flag as state: accept the orders that change them, and provide their current value
+            // Own the food total and the turn flag as state: accept the orders that change them, and provide their current value.
+            // AdjustFood keeps a named handler because it's the one with real logic; the rest are inline.
             Broadcaster.Obey<AdjustFood>(this, OnAdjustFood);
-            Broadcaster.Obey<EndPlayerTurn>(this, OnEndPlayerTurn);
+            Broadcaster.Obey<EndPlayerTurn>(this, _ => SetPlayersTurn(false));
             Broadcaster.Provide<FoodChanged>(this, () => new FoodChanged { current = playerFoodPoints, source = FoodChangeSource.Move });
             Broadcaster.Provide<PlayerTurn>(this, () => new PlayerTurn { active = playersTurn });
         }
@@ -124,15 +129,6 @@ namespace SideXP.Broadcaster.Scavengers
         }
 
         /// <summary>
-        /// Handles the <see cref="EndRun"/> command: announces the run's end and disables this game manager.
-        /// </summary>
-        private void OnEndRun(EndRun command)
-        {
-            Broadcaster.Emit(new RunEnded { level = level });
-            enabled = false;
-        }
-
-        /// <summary>
         /// Handles the <see cref="AdjustFood"/> command: applies the change, announces it, and ends the run on starvation.
         /// </summary>
         private void OnAdjustFood(AdjustFood command)
@@ -145,14 +141,6 @@ namespace SideXP.Broadcaster.Scavengers
                 Broadcaster.Emit(new PlayerDied());
                 Broadcaster.Order(new EndRun());
             }
-        }
-
-        /// <summary>
-        /// Handles the <see cref="EndPlayerTurn"/> command: hands the turn over to the enemies.
-        /// </summary>
-        private void OnEndPlayerTurn(EndPlayerTurn command)
-        {
-            SetPlayersTurn(false);
         }
 
         /// <summary>
