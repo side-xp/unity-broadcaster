@@ -32,7 +32,7 @@ The concept come from an [old Unity tutorial](https://learn.unity.com/course/int
 
 ## Reworking with Broadcaster
 
-Broadcaster lets a system announce *that something happened*, or *ask another system to do something*, without holding a reference to whoever handles it. Systems no longer wire themselves to each other. Instead, they exchange **events**, and the *kind* of event you pick (a [signal](#signals---making-the-audio-system-independent), a [command](#commands---giving-the-verbs), a request, a cue) is a deliberate contract about what a listener is allowed to do with it.
+Broadcaster lets a system announce *that something happened*, or *ask another system to do something*, without holding a reference to whoever handles it. Systems no longer wire themselves to each other. Instead, they exchange **events**, and the *kind* of event you pick (a [signal](#signals---making-the-audio-system-independent), a [command](#commands---giving-the-verbs), a [request](#why-providers-and-not-requests), a [cue](#cues---handing-the-clock)) is a deliberate contract about what a listener is allowed to do with it.
 
 The rework introduces those kinds one at a time, each solving a concrete coupling problem in the original tutorial code. Each section presents a problem, then shows how Broadcaster features solve it.
 
@@ -456,3 +456,87 @@ If your game *does* have a genuine query ("is this tile walkable?", "what's the 
 - The food counter is correct on every level start, seeded by the owner announcing it, not by a fragile hand-off.
 - Turn state is readable everywhere and writable only by its owner: "reading it" no longer means "you can break it."
 - No `FindGameObjectWithTag`, no tags at all, so no hidden project setup
+
+## Cues - Handing the clock
+
+A **cue** (`ICue`) is a beat the game **waits for**. Like a signal it can have any number of performers, or none. But unlike a signal, sending a cue doesn't complete until *every* performer has finished. It's the tool for "this moment happens, and the game pauses on it until everyone's done".
+
+### The problem
+
+`GameManager` runs the enemy turn by *guessing* how long each enemy takes:
+
+```csharp
+// Original GameManager.MoveEnemies
+enemies[i].MoveEnemy();
+yield return new WaitForSeconds(enemies[i].moveTime);
+```
+
+It never waits for the enemy to actually finish: it waits for `moveTime`, a public field it reads and treats as a duration. But the real movement is `SmoothMovement`, a coroutine that can drift from that number. The wait is an *estimate standing in for a completion signal*.
+
+The deeper problem is *who owns the timing*. The turn manager decides how long the enemy turn takes, so a designer who wants a death animation, a hit-flash, or a camera shake on the enemy turn must either make it fit the existing window and hope, or edit `GameManager`'s coroutine. Pacing is the designer's job, and it's locked inside gameplay code.
+
+### Broadcaster's solution
+
+The developer declares the beat (*"the enemy turn happens, and the game waits for everyone"*) and `await`s it. Anyone can hang a reaction on it, and the cue doesn't complete until the slowest one does.
+
+```csharp
+// GameManager, on the enemies' turn
+await Broadcaster.Cue(new EnemyTurn());
+// …only now is it the player's turn again
+```
+
+Nothing here knows how many performers there are, how long each takes, or what they do. The turn ends when the last one reports finished (measured, not estimated).
+
+### The implementation
+
+**The enemies are the performers.** Each enemy joins the cue in `OnEnable` and reports completion only when its move or attack has *actually* finished:
+
+```csharp
+// Enemy
+private void OnEnable() => Broadcaster.Perform<EnemyTurn>(this, PerformTurn);
+private void OnDisable() => Broadcaster.UnregisterAll(this);
+
+// PerformTurn starts this coroutine, handed a `done` callback to call when it's finished
+private IEnumerator TurnRoutine(Action done)
+{
+    // …decide a direction toward the player…
+    if (CanMove(xDir, yDir, out Vector2 end, out RaycastHit2D hit))
+        yield return StartCoroutine(SmoothMovement(end)); // wait for the real slide
+    else if (/* the player is in the way */)
+        { /* order the damage, play the attack */ yield return new WaitForSeconds(attackTime); }
+
+    done(); // the cue's when-all waits for this
+}
+```
+
+`yield return StartCoroutine(SmoothMovement(end))` is the whole fix: the performer completes when the animation is genuinely over, not after a guessed number. Note that a performer can also be a plain `async Awaitable` if you prefer. The enemy uses the coroutine-plus-`done` shape because its movement already lives in a coroutine.
+
+**The performer registry *is* the enemy list.** This is the best structural moment in the sample. The old code kept a `List<Enemy>`, an `AddEnemyToList` method each enemy called on spawn, and a loop over that list. All three are gone: the enemies *are* the set of `EnemyTurn` performers. They add and remove themselves with their own lifecycle, and `GameManager` never holds a reference to a single one. Sending the cue reaches exactly the enemies that are alive.
+
+> **This introduces `async`.** `GameManager.RunEnemyTurn` is `async` and `await`s the cue across frames. It passes the manager's `destroyCancellationToken`, so exiting play mode mid-turn unwinds cleanly instead of throwing.
+
+**Make when-all observable.** With every enemy taking the same time, when-all looks identical to a plain loop. So the sample gives enemies genuinely different durations: a `StrongZombie` slides slower than a `Zombie`, and *attacking* takes longer than *moving*. Now you can watch it: the fast zombies stop, and the player's turn still doesn't return until the slow one (or the attacker) has finished.
+
+### The designer payoff
+
+`EnemyTurn` is a beat anyone can decorate. A designer who wants the screen to shake on the enemy turn writes a performer and hangs it on the cue, without touching the gameplay code:
+
+```csharp
+public class ScreenShake : MonoBehaviour
+{
+    private void OnEnable() => Broadcaster.Perform<EnemyTurn>(this, Shake);
+    private void OnDisable() => Broadcaster.UnregisterAll(this);
+
+    // The cue waits for this to return
+    private async Awaitable Shake(EnemyTurn cue)
+    {
+        // …shake the camera for a moment…
+    }
+}
+```
+
+The game now **waits for the shake**, because it's a performer like any other. Delete the component and the turn speeds back up. That gesture (adding and removing feedback that the game's pacing respects, with zero gameplay edits) is the whole thesis of Broadcaster in one move, and it only lands because of the steps before it.
+
+### The trade-off, named
+
+The cue is the most powerful permission on the ladder, and the only one where a performer can *hurt* you: one that never calls `done()` never completes, and the turn waits on it forever. Broadcaster softens this (unregistering a performer resolves its slot, cancellation fans out, a throwing performer is isolated) but it can't eliminate it. The power to control the game's timing is the power to stall it, so hand `ICue` out deliberately.
