@@ -264,11 +264,17 @@ namespace SideXP.Broadcaster.EditorOnly
         private void DrawDetailHeader(EventEntry entry)
         {
             EditorGUILayout.Space(6);
-            EditorGUILayout.LabelField(entry.DisplayName, EditorStyles.boldLabel);
-            EditorGUILayout.LabelField(KindName(entry.Kind) + ResultTypeSuffix(entry), EditorStyles.miniLabel);
+
+            // Title row: the leaf of the display-name path on the left, the colorized kind tag on the right (matching the tree).
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Label(LeafName(entry), EditorStyles.largeLabel);
+                GUILayout.FlexibleSpace();
+                DrawKindTag(entry);
+            }
 
             string fullName = string.IsNullOrEmpty(entry.Namespace) ? entry.Name : entry.Namespace + "." + entry.Name;
-            EditorGUILayout.LabelField(fullName, EditorStyles.miniLabel);
+            EditorGUILayout.LabelField(fullName, ItalicTypeStyle);
 
             if (!string.IsNullOrEmpty(entry.Description))
             {
@@ -277,6 +283,46 @@ namespace SideXP.Broadcaster.EditorOnly
             }
 
             EditorGUILayout.Space(4);
+        }
+
+        // The last segment of the event's display-name path (the whole name when it carries no path).
+        private static string LeafName(EventEntry entry)
+        {
+            string name = entry.DisplayName;
+            int slash = name.LastIndexOf('/');
+            return slash >= 0 ? name.Substring(slash + 1).Trim() : name;
+        }
+
+        // A right-aligned kind label tinted by the shared kind color (the tree's kind-tag look).
+        private static void DrawKindTag(EventEntry entry)
+        {
+            GUIStyle style = KindTagStyle;
+            Color previous = style.normal.textColor;
+            style.normal.textColor = EventKindColors.Get(entry.Kind);
+            GUILayout.Label(KindName(entry.Kind), style, MoreGUI.HeightSOpt);
+            style.normal.textColor = previous;
+        }
+
+        private static GUIStyle s_kindTagStyle;
+        private static GUIStyle KindTagStyle
+        {
+            get
+            {
+                if (s_kindTagStyle == null)
+                    s_kindTagStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight };
+                return s_kindTagStyle;
+            }
+        }
+
+        private static GUIStyle s_italicTypeStyle;
+        private static GUIStyle ItalicTypeStyle
+        {
+            get
+            {
+                if (s_italicTypeStyle == null)
+                    s_italicTypeStyle = new GUIStyle(EditorStyles.miniLabel) { fontStyle = FontStyle.Italic };
+                return s_italicTypeStyle;
+            }
         }
 
         private void DrawEmitBox(EventEntry entry)
