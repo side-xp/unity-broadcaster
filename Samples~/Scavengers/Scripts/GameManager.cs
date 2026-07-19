@@ -105,6 +105,9 @@ namespace SideXP.Broadcaster.Scavengers
             // Mark setup, cleared in EndSetup()
             doingSetup = true;
 
+            // Every level begins on the player's turn
+            SetPlayersTurn(true);
+
             // Announce the new level; the UI owns the level card and how long it stays up
             Broadcaster.Emit(new LevelStarted { level = level });
             Invoke(nameof(EndSetup), levelStartDelay);
