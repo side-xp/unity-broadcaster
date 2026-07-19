@@ -304,7 +304,7 @@ namespace SideXP.Broadcaster.Tests
             bus.Subscribe<PongSignal>(owner1, _ => { });
             bus.Subscribe<PingSignal>(owner2, _ => owner2Calls++);
 
-            int removed = bus.UnsubscribeAll(owner1);
+            int removed = bus.UnregisterAll(owner1);
             Assert.AreEqual(2, removed);
 
             bus.Emit(new PingSignal());
@@ -318,7 +318,7 @@ namespace SideXP.Broadcaster.Tests
             object owner = new object();
             bus.Subscribe<PingSignal>(owner, _ => { });
 
-            Assert.AreEqual(0, bus.UnsubscribeAll(new object()));
+            Assert.AreEqual(0, bus.UnregisterAll(new object()));
         }
 
         [Test]

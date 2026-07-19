@@ -7,7 +7,7 @@ namespace SideXP.Broadcaster
     /// Optional metadata for an <see cref="IEvent"/> type, consumed by tooling (the editor windows and the monitor).
     /// </summary>
     [AttributeUsage(AttributeTargets.Struct | AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
-    public sealed class BroadcastAttribute : Attribute
+    public sealed class EventAttribute : Attribute
     {
 
         /// <summary>
@@ -20,6 +20,16 @@ namespace SideXP.Broadcaster
         /// sensitive, huge, or expensive to stringify. Off by default (the full payload is captured).
         /// </summary>
         public bool OmitSnapshot { get; set; }
+
+        /// <inheritdoc cref="EventAttribute"/>
+        public EventAttribute() { }
+
+        /// <inheritdoc cref="EventAttribute"/>
+        /// <param name="description"><inheritdoc cref="Description" path="/summary"/></param>
+        public EventAttribute(string description)
+        {
+            Description = description;
+        }
 
     }
 

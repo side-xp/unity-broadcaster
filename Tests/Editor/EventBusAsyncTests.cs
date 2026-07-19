@@ -297,7 +297,7 @@ namespace SideXP.Broadcaster.Tests
             Awaitable<int>.Awaiter awaiter = bus.OrderAsync(new DoubleCommand { Value = 1 }).GetAwaiter();
             Assert.IsFalse(awaiter.IsCompleted);
 
-            bus.UnsubscribeAll(owner); // the handler vanishes before completing
+            bus.UnregisterAll(owner); // the handler vanishes before completing
 
             Assert.IsTrue(awaiter.IsCompleted, "The caller must resolve rather than hang forever.");
             Assert.Catch<OperationCanceledException>(() => awaiter.GetResult());
@@ -323,7 +323,7 @@ namespace SideXP.Broadcaster.Tests
                 reRegistered = true;
             });
 
-            Assert.DoesNotThrow(() => bus.UnsubscribeAll(owner));
+            Assert.DoesNotThrow(() => bus.UnregisterAll(owner));
 
             Assert.IsTrue(reRegistered, "The resumed caller ran, and its registration went through.");
             Assert.Catch<OperationCanceledException>(() => awaiter.GetResult());

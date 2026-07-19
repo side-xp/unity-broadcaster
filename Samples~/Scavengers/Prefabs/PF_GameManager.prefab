@@ -1,0 +1,96 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &6834967848019062214
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7545652995463247884}
+  - component: {fileID: 3700757054342495006}
+  - component: {fileID: 3216374587822400677}
+  m_Layer: 0
+  m_Name: PF_GameManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &7545652995463247884
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6834967848019062214}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &3700757054342495006
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6834967848019062214}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 81d2f4409dda28340944d09d0f60653f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: SideXP.Unity.Broadcaster.Scavengers::SideXP.Broadcaster.Scavengers.GameManager
+--- !u!114 &3216374587822400677
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6834967848019062214}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f1e65e02e2116304688d6ce70258ebe0, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: SideXP.Unity.Broadcaster.Scavengers::SideXP.Broadcaster.Scavengers.BoardManager
+  columns: 8
+  rows: 8
+  wallCount:
+    minimum: 5
+    maximum: 9
+  foodCount:
+    minimum: 1
+    maximum: 5
+  exit: {fileID: 8103938304498385156, guid: 263ae54e2de2fe945a2d73458dfdda7c, type: 3}
+  floorTiles:
+  - {fileID: 5361841262467371963, guid: be99c3c4f339845418fbc152e00a9a62, type: 3}
+  - {fileID: 5361841262467371963, guid: f28ba5804efc71747bf73bb540f1bb40, type: 3}
+  - {fileID: 5361841262467371963, guid: c22b7f0405fe3b74db3c84830bb5a503, type: 3}
+  - {fileID: 5361841262467371963, guid: 39509a21acf0f4a479ec088dcc71c169, type: 3}
+  - {fileID: 5361841262467371963, guid: 2a3ee356247338c47b7ebce7e6b12053, type: 3}
+  - {fileID: 5361841262467371963, guid: 7d4c528d64bf66745821be3332bf382b, type: 3}
+  - {fileID: 5361841262467371963, guid: 9acdc143686a26b4791e82df53e9ab41, type: 3}
+  - {fileID: 5361841262467371963, guid: 5eb7004a43680c34698f537833f39946, type: 3}
+  wallTiles:
+  - {fileID: 4322759673684876051, guid: 1544267ff2eaf2e44b98c6a34f397b26, type: 3}
+  - {fileID: 4322759673684876051, guid: d309f24a5e40ee046ae20dcfd51f2059, type: 3}
+  - {fileID: 4322759673684876051, guid: 88e13fb6db23ee24d924d3c6988f6f22, type: 3}
+  - {fileID: 4322759673684876051, guid: ecd472b5b647933439e8f6f25f0cf597, type: 3}
+  - {fileID: 4322759673684876051, guid: cb035590c00f2234681136e781b5126c, type: 3}
+  - {fileID: 4322759673684876051, guid: 14e95c231bc4ded4da1be4220b726919, type: 3}
+  - {fileID: 4322759673684876051, guid: 5dbcb2b0f292c2641b2fc4993a57624a, type: 3}
+  - {fileID: 4322759673684876051, guid: d044c7e8f2672004f883e23aea870bcf, type: 3}
+  foodTiles:
+  - {fileID: 5427028354320139900, guid: b46f3d91270b89d47a54565733496377, type: 3}
+  - {fileID: 5427028354320139900, guid: 87855e04b02bd3843b6bc199274d03b7, type: 3}
+  enemyTiles:
+  - {fileID: 6124207620165150345, guid: cab73293c60a7694ca473a7095d164f8, type: 3}
+  - {fileID: 6124207620165150345, guid: 0391347d289f9a846a6365484ea1bc02, type: 3}
+  outerWallTiles:
+  - {fileID: 6579850966996669671, guid: 0bae4f64ea2fc6b41ba3efce5b1b95d5, type: 3}
+  - {fileID: 6579850966996669671, guid: 789ca06dee393cb4c8a82fe943987117, type: 3}
+  - {fileID: 6579850966996669671, guid: b3841add5d35f6b45805b5906d9c3e67, type: 3}

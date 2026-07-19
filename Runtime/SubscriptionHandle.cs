@@ -8,7 +8,7 @@ namespace SideXP.Broadcaster
     /// one registration.
     /// </summary>
     /// <remarks>
-    /// Handles <i>complement</i> owner-based cleanup, they don't replace it: <see cref="EventBus.UnsubscribeAll(object)"/> in
+    /// Handles <i>complement</i> owner-based cleanup, they don't replace it: <see cref="EventBus.UnregisterAll(object)"/> in
     /// <c>OnDisable()</c> is the blessed one-liner, while a handle is for fine-grained lifetimes. Disposing is idempotent and safe on
     /// <c>default(SubscriptionHandle)</c>.
     /// </remarks>

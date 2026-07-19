@@ -80,7 +80,7 @@ namespace SideXP.Broadcaster.Tests
             int calls = 0;
 
             bus.Provide<PingSignal>(providerOwner, () => new PingSignal { Value = 5 });
-            bus.UnsubscribeAll(providerOwner); // provider dies with its owner
+            bus.UnregisterAll(providerOwner); // provider dies with its owner
 
             bus.Subscribe<PingSignal>(subscriberOwner, _ => calls++, init: true);
 
@@ -237,7 +237,7 @@ namespace SideXP.Broadcaster.Tests
             bus.Provide<PingSignal>(outgoing, () => new PingSignal { Value = 1 });
             bus.Provide<PingSignal>(incoming, () => new PingSignal { Value = 2 }, replace: true);
 
-            bus.UnsubscribeAll(outgoing); // outgoing scene unloads after the hand-off
+            bus.UnregisterAll(outgoing); // outgoing scene unloads after the hand-off
 
             Assert.IsTrue(bus.TryGetCurrent<PingSignal>(out PingSignal current), "The incoming provider must remain.");
             Assert.AreEqual(2, current.Value);
@@ -287,7 +287,7 @@ namespace SideXP.Broadcaster.Tests
             bus.Provide<PingSignal>(owner, () => new PingSignal { Value = 1 });
             bus.Subscribe<PingSignal>(owner, _ => { });
 
-            int removed = bus.UnsubscribeAll(owner);
+            int removed = bus.UnregisterAll(owner);
 
             Assert.AreEqual(2, removed, "Both the listener and the provider are counted.");
             Assert.IsFalse(bus.TryGetCurrent<PingSignal>(out _));

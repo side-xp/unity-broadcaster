@@ -188,10 +188,10 @@ namespace SideXP.Broadcaster
 
         #region General
 
-        /// <inheritdoc cref="EventBus.UnsubscribeAll(object)"/>
-        public static int UnsubscribeAll(object owner)
+        /// <inheritdoc cref="EventBus.UnregisterAll(object)"/>
+        public static int UnregisterAll(object owner)
         {
-            return Default.UnsubscribeAll(owner);
+            return Default.UnregisterAll(owner);
         }
 
         /// <inheritdoc cref="EventBus.Clear"/>

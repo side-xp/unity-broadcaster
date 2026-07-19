@@ -27,7 +27,31 @@ This package is developed as part of an internal Unity project, where it (and ou
 | Folder | Contents |
 | --- | --- |
 | `Runtime/` | Runtime code shipped with the package |
+| `Samples~/` | Optional sample content (e.g. tutorials), importable from the Package Manager window. |
 | `Documentation~/` | Documentation sources: guides, images and the Zensical config. The `~` suffix tells Unity to ignore this folder. |
+
+### Working on Samples content
+
+Because of the `~` suffix, Unity won't see, import, or compile anything under `Samples~/` directly (that's what keeps sample content out of every consumer's project until they explicitly import it from the Package Manager window). It also means you can't just open a sample's scripts/prefabs/scenes in your test project and start editing: the Editor has no idea that folder exists.
+
+The fix is to link a folder inside your test project's `Assets/` to the real `Samples~/<sample>` folder on disk. It's not a copy: the same files are reachable from two paths, so Unity fully imports/compiles/previews it, and every edit you make lands directly on the tracked files (nothing to sync back before committing). Put the link under a gitignored path in your test project (e.g. `Assets/_DEV/`) so it never gets committed as a duplicate of the real content.
+
+**Windows** (directory junction, no admin rights required):
+
+```powershell
+New-Item -ItemType Junction `
+  -Path "<your-project>\Assets\_DEV\Broadcaster\Samples\Scavengers" `
+  -Target "<your-project>\Packages\com.side-xp.broadcaster\Samples~\Scavengers"
+```
+
+> Don't remove the junction with `Remove-Item -Recurse -Force` (in Windows PowerShell 5.1 that can delete the *target's* contents instead of just the link). Use `(Get-Item <path>).Delete()` or `cmd /c rmdir <path>` (no `/s`) instead.
+
+**macOS / Linux** (symbolic link):
+
+```sh
+ln -s "<your-project>/Packages/com.side-xp.broadcaster/Samples~/Scavengers" \
+      "<your-project>/Assets/_DEV/Broadcaster/Samples/Scavengers"
+```
 
 ### Documentation
 

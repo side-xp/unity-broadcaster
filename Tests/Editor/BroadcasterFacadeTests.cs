@@ -40,7 +40,7 @@ namespace SideXP.Broadcaster.Tests
             int calls = 0;
 
             Broadcaster.Subscribe<PingSignal>(owner, _ => calls++);
-            Broadcaster.UnsubscribeAll(owner);
+            Broadcaster.UnregisterAll(owner);
             Broadcaster.Emit(new PingSignal());
 
             Assert.AreEqual(0, calls);

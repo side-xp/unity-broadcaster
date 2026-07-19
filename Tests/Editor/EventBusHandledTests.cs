@@ -223,7 +223,7 @@ namespace SideXP.Broadcaster.Tests
             bus.Obey<DoubleCommand, int>(outgoing, command => command.Value * 2);
             bus.Obey<DoubleCommand, int>(incoming, command => command.Value * 10, replace: true);
 
-            bus.UnsubscribeAll(outgoing); // outgoing scene unloads after the hand-off
+            bus.UnregisterAll(outgoing); // outgoing scene unloads after the hand-off
 
             Assert.AreEqual(30, bus.Order(new DoubleCommand { Value = 3 }), "The incoming handler must remain.");
         }
@@ -279,7 +279,7 @@ namespace SideXP.Broadcaster.Tests
             bus.Obey<MoveCommand>(owner, _ => { });
             bus.Answer<SumRequest, int>(owner, request => request.A + request.B);
 
-            int removed = bus.UnsubscribeAll(owner);
+            int removed = bus.UnregisterAll(owner);
 
             Assert.AreEqual(2, removed, "Both the command handler and the request answerer are counted.");
             LogAssert.Expect(LogType.Error, new Regex("No handler is registered for command"));

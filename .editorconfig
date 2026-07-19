@@ -1,5 +1,5 @@
 # ==============================================================================
-# EditorConfig — C# / Unity coding conventions (Sideways Experiments)
+# C# / Unity coding conventions (Sideways Experiments)
 #
 # Portable style config for Visual Studio, Rider and any EditorConfig-aware tool.
 # Encodes the personal "coding-style" conventions and standard C# practice.
@@ -39,7 +39,7 @@ end_of_line = lf
 guidelines = 140 solid
 
 # ==============================================================================
-# Data / config / markup files — 2-space indent
+# Data / config / markup files (2-space indent)
 # ==============================================================================
 [*.{json,json5,asmdef,asmref,yml,yaml}]
 indent_size = 2
@@ -129,7 +129,7 @@ dotnet_style_allow_statement_immediately_after_block_experimental = true:suggest
 
 #### C# Coding Conventions ####
 
-# var preferences — use var only when the type is obvious from the right-hand side
+# var preferences: use var only when the type is obvious from the right-hand side
 csharp_style_var_elsewhere = false:suggestion
 csharp_style_var_for_built_in_types = false:suggestion
 csharp_style_var_when_type_is_apparent = true:suggestion
@@ -288,7 +288,7 @@ dotnet_naming_rule.constant_should_be_pascalcase.severity = warning
 dotnet_naming_rule.constant_should_be_pascalcase.symbols = constant
 dotnet_naming_rule.constant_should_be_pascalcase.style = pascalcase
 
-# Non-public constants: PascalCase. Required intersection rule — a const is
+# Non-public constants: PascalCase. Required intersection rule: a const is
 # implicitly static, so without this the more-specific non-public static-field
 # rule (s_camelCase) would win and demand an s_ prefix on constants.
 dotnet_naming_rule.non_public_constant_should_be_pascalcase.severity = warning
@@ -305,7 +305,7 @@ dotnet_naming_rule.private_static_field_should_be_s_camelcase.severity = warning
 dotnet_naming_rule.private_static_field_should_be_s_camelcase.symbols = private_static_field
 dotnet_naming_rule.private_static_field_should_be_s_camelcase.style = s_camelcase
 
-# Public / protected fields: PascalCase (rare — prefer [SerializeField] private)
+# Public / protected fields: PascalCase (rare, prefer [SerializeField] private)
 dotnet_naming_rule.public_field_should_be_pascalcase.severity = warning
 dotnet_naming_rule.public_field_should_be_pascalcase.symbols = public_field
 dotnet_naming_rule.public_field_should_be_pascalcase.style = pascalcase

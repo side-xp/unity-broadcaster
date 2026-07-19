@@ -325,7 +325,7 @@ namespace SideXP.Broadcaster
         {
             TypePlan plan = new TypePlan { TypeName = type.Name };
 
-            BroadcastAttribute attribute = type.GetCustomAttribute<BroadcastAttribute>(inherit: false);
+            EventAttribute attribute = type.GetCustomAttribute<EventAttribute>(inherit: false);
             plan.Omit = attribute != null && attribute.OmitSnapshot;
             if (plan.Omit)
             {

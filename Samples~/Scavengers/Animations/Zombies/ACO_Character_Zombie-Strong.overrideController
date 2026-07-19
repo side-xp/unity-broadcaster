@@ -1,0 +1,15 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!221 &22100000
+AnimatorOverrideController:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: ACO_Character_Zombie-Strong
+  m_Controller: {fileID: 9100000, guid: 8394c3c59749b2a4da41b11211e953ee, type: 2}
+  m_Clips:
+  - m_OriginalClip: {fileID: 7400000, guid: 99e4193374bb8904599df400303f92dc, type: 2}
+    m_OverrideClip: {fileID: 7400000, guid: 32a2cb81a41711243bc58318f238daa7, type: 2}
+  - m_OriginalClip: {fileID: 7400000, guid: 7df74f86847cc4947bb9d85b84adebe8, type: 2}
+    m_OverrideClip: {fileID: 7400000, guid: db4e1449381ea8049875edd99710ecbe, type: 2}
