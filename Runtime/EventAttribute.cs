@@ -21,6 +21,11 @@ namespace SideXP.Broadcaster
         /// </summary>
         public bool OmitSnapshot { get; set; }
 
+        /// <summary>
+        /// When true, the Events window leaves this event out of its catalog by default.
+        /// </summary>
+        public bool Hidden { get; set; }
+
         /// <inheritdoc cref="EventAttribute"/>
         public EventAttribute() { }
 

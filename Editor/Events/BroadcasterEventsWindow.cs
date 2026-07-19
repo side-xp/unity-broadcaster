@@ -29,6 +29,11 @@ namespace SideXP.Broadcaster.EditorOnly
         [SerializeField]
         private string _search = string.Empty;
 
+        // When off (the default), events flagged with [Broadcast(Hidden = true)] — chiefly package test events — are left out, so the window
+        // shows only the events a project actually authors. The toolbar eye reveals them.
+        [SerializeField]
+        private bool _showHidden = false;
+
         [SerializeField]
         private Vector2 _scroll = Vector2.zero;
 
@@ -100,7 +105,7 @@ namespace SideXP.Broadcaster.EditorOnly
         {
             DrawToolbar();
 
-            List<EventEntry> filtered = EventCatalog.Filter(_catalog, _search);
+            List<EventEntry> filtered = EventCatalog.Filter(_catalog, _search, _showHidden);
             List<KeyValuePair<EventKind, List<EventEntry>>> groups = EventCatalog.GroupByKind(filtered);
 
             using (EditorGUILayout.ScrollViewScope scroll = new EditorGUILayout.ScrollViewScope(_scroll))
@@ -114,7 +119,13 @@ namespace SideXP.Broadcaster.EditorOnly
                 }
                 if (filtered.Count == 0)
                 {
-                    EditorGUILayout.HelpBox("No event type matches the search.", MessageType.Info);
+                    // Tell the two "nothing here" cases apart: the eye hiding everything that would otherwise match vs. a genuine no-match.
+                    bool onlyHiddenMatch = !_showHidden && EventCatalog.Filter(_catalog, _search, includeHidden: true).Count > 0;
+                    EditorGUILayout.HelpBox(
+                        onlyHiddenMatch
+                            ? "Only hidden events match. Toggle the eye in the toolbar to show them."
+                            : "No event type matches the search.",
+                        MessageType.Info);
                     return;
                 }
 
@@ -133,12 +144,25 @@ namespace SideXP.Broadcaster.EditorOnly
             {
                 _search = EditorGUILayout.TextField(_search, EditorStyles.toolbarSearchField);
 
+                _showHidden = GUILayout.Toggle(_showHidden, ShowHiddenContent(_showHidden), EditorStyles.toolbarButton, GUILayout.Width(30));
+
                 if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(60)))
                     _catalog = EventCatalog.Build();
 
                 GUILayout.FlexibleSpace();
                 GUILayout.Label(Application.isPlaying ? "Play mode" : "Edit mode (live columns show in play mode)", EditorStyles.miniLabel);
             }
+        }
+
+        // The eye toggle, mirroring Unity's object-picker "show hidden" affordance: an open eye when hidden events are shown, a closed one
+        // when they're filtered out. A fresh GUIContent (not the shared cached icon) so setting the tooltip doesn't leak into other callers.
+        private static GUIContent ShowHiddenContent(bool showHidden)
+        {
+            string icon = showHidden ? "animationvisibilitytoggleon" : "animationvisibilitytoggleoff";
+            string tooltip = showHidden
+                ? "Showing hidden events (e.g. package test events). Click to hide them."
+                : "Hiding events marked hidden (e.g. package test events). Click to show them.";
+            return new GUIContent(EditorGUIUtility.IconContent(icon).image, tooltip);
         }
 
         private static void DrawGroupHeader(EventKind kind, int count)

@@ -35,11 +35,16 @@ namespace SideXP.Broadcaster.EditorOnly
         /// <summary>Whether the type opted out of payload capture with <c>[Broadcast(OmitSnapshot = true)]</c>.</summary>
         public bool OmitSnapshot { get; }
 
+        /// <summary>
+        /// Whether the type asked to be kept out of the catalog by default with <c>[Broadcast(Hidden = true)]</c>.
+        /// </summary>
+        public bool Hidden { get; }
+
         /// <summary>Whether this entry describes a valued command or a request (one that reports a <see cref="ResultType"/>).</summary>
         public bool HasResult => ResultType != null;
 
         /// <inheritdoc cref="EventEntry"/>
-        public EventEntry(Type eventType, EventKind kind, Type resultType, string description, bool omitSnapshot)
+        public EventEntry(Type eventType, EventKind kind, Type resultType, string description, bool omitSnapshot, bool hidden)
         {
             EventType = eventType;
             Kind = kind;
@@ -48,6 +53,7 @@ namespace SideXP.Broadcaster.EditorOnly
             Namespace = eventType.Namespace ?? string.Empty;
             Description = description;
             OmitSnapshot = omitSnapshot;
+            Hidden = hidden;
         }
 
     }
