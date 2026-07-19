@@ -1,0 +1,6 @@
+{
+    "name": "SideXP.Unity.Broadcaster",
+    "autoReferenced": true,
+    "rootNamespace": "SideXP.Broadcaster",
+    "includePlatforms": []
+}

@@ -1,0 +1,20 @@
+{
+    "name": "SideXP.Unity.Broadcaster.Editor",
+    "rootNamespace": "SideXP.Broadcaster.EditorOnly",
+    "references": [
+        "SideXP.Unity.Broadcaster",
+        "SideXP.Unity.Core",
+        "SideXP.Unity.Core.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,25 @@
+{
+    "name": "SideXP.Unity.Broadcaster.Tests.Editor",
+    "rootNamespace": "SideXP.Broadcaster.Tests",
+    "references": [
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner",
+        "SideXP.Unity.Broadcaster",
+        "SideXP.Unity.Broadcaster.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

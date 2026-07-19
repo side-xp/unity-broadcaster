@@ -1,0 +1,17 @@
+{
+    "name": "SideXP.Unity.Broadcaster.Scavengers",
+    "rootNamespace": "SideXP.Broadcaster.Scavengers",
+    "references": [
+        "GUID:ea5807f619bfdf34d8a2f39990f0b325",
+        "GUID:75469ad4d38634e559750d17036d5f7c"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,15 +1,11 @@
-# Sideways Experiments Unity Package (@todo)
+# SideXP - Broadcaster (Unity)
 
-<!-- @todo
-Write package description and minimum Unity version if applicable
-Remove the following block
--->
-
-> This repository has just been created from our [template](https://github.com/side-xp/unity-package-template), and we're still working to release a first version. So be patient, there's not a very long time left to wait!
+Asset-based event communication system.
 
 ## Features
 
-<!-- @todo Describe the features included in this package -->
+- Assets that represent an event (called *channel*)
+- Also allow using types as channel
 
 ## Installation
 
@@ -33,20 +29,32 @@ Remove the following block
 
 ## Documentation & Help
 
-Complete documentation available at https://side-xp.github.io/@todo
+<!-- docs:remove:start -->
+Complete documentation available at https://side-xp.github.io/unity-broadcaster
 
-If you need help or just want to chat with the community and the *Sideways Experiments* core team, you're welcome to join our [Discord server](https://discord.gg/bMK2d47JaE)!
+<!-- docs:remove:end -->
+If you need help or just want to chat with the community and the *Sideways Experiments* core team, you're welcome to join our [Discord server](https://discord.gg/G49RUZ9F2N)!
 
 ## Contributing
 
-Do you want to get involved in our projects? Check our [general contributing guidelines](https://github.com/side-xp/docs/blob/main/shared/CONTRIBUTING.md) to learn more!
+<!-- docs:remove:start -->
+Do you want to get involved in our projects? Check the [CONTRIBUTING.md](./CONTRIBUTING.md) file to learn more!
+<!-- docs:remove:end -->
+<!-- docs:only:start
+Do you want to get involved in our projects? Check our [contributing guidelines](https://github.com/side-xp/unity-broadcaster/blob/main/CONTRIBUTING.md) to learn more!
+docs:only:end -->
 
 ## License
 
+<!-- docs:remove:start -->
+This project is licensed under the [MIT License](./LICENSE.md).
+<!-- docs:remove:end -->
+<!-- docs:only:start
 This project is licensed under the [MIT License](https://mit-license.org).
+docs:only:end -->
 
 ---
 
 Crafted and maintained with love by [Sideways Experiments](https://sideways-experiments.com)
 
-(c) 2022-2025 Sideways Experiments
+(c) 2022-2026 Sideways Experiments

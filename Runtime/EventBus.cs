@@ -1,0 +1,1642 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+
+using UnityEngine;
+
+namespace SideXP.Broadcaster
+{
+
+    /// <summary>
+    /// A code-first, type-keyed event bus for decoupled communication.<br/>
+    /// In this system, an event is a C# type, that type is both the identity and the payload.<br/>
+    /// This instantiable core holds all state and logic. You should prefer using <see cref="Broadcaster"/> façade at runtime, instead of
+    /// using this class directly. But it's useful if you need an isolated or temporary events bus, eg. for testing.
+    /// </summary>
+    public sealed partial class EventBus
+    {
+
+        #region Fields
+
+        /// <summary>
+        /// Active signal registrations, keyed by exact signal type.
+        /// </summary>
+        /// <remarks>
+        /// There's no inheritance dispatch: an event of type <c>MyEvent</c> is mechanically different than <c>MyEventBase</c>.
+        /// </remarks>
+        private readonly Dictionary<Type, List<ListenerRegistration>> _signalRegistrations = new Dictionary<Type, List<ListenerRegistration>>();
+
+        /// <summary>
+        /// Number of dispatches (or bulk edits) currently iterating registration lists.<br/>
+        /// If greater than zero, that means some loop is walking a list, so structural edits to that list are unsafe (they'd corrupt the
+        /// iteration) and are deferred until the outermost operation finishes (which is the role of <see cref="_pendingRemovals"/>).<br/>
+        /// This value is a counter rather than a boolean flag because dispatches nest (a listener may emit from inside its callback).
+        /// </summary>
+        private int _dispatchDepth = 0;
+
+        /// <summary>
+        /// Registrations that were requested for removal while a dispatch was running (so their list couldn't be edited yet). See
+        /// <see cref="_dispatchDepth"/>.<br/>
+        /// They are already marked inactive (dispatch loops skip them) and get physically pulled from their lists once the outermost
+        /// dispatch ends.
+        /// </summary>
+        private readonly List<Registration> _pendingRemovals = new List<Registration>();
+
+        /// <summary>
+        /// State providers, at most one per signal type. A provider answers "what is the current value of this signal?" so a listener
+        /// subscribing with <c>init</c> can pull it immediately.
+        /// </summary>
+        private readonly Dictionary<Type, ProviderRegistration> _providers = new Dictionary<Type, ProviderRegistration>();
+
+        /// <summary>
+        /// Command and request handlers, at most one per event type. Both kinds share this single-handler store (a type is only ever a
+        /// command <i>or</i> a request, never both), keyed by exact event type.
+        /// </summary>
+        private readonly Dictionary<Type, HandlerRegistration> _handlers = new Dictionary<Type, HandlerRegistration>();
+
+        /// <summary>
+        /// Cue performers, keyed by exact cue type. Like signal listeners, a cue has 0..N performers held in a per-type list and invoked
+        /// in registration order; unlike signals, a cue's send awaits every performer's completion (when-all).
+        /// </summary>
+        private readonly Dictionary<Type, List<PerformerRegistration>> _cuePerformers = new Dictionary<Type, List<PerformerRegistration>>();
+
+        #endregion
+
+
+        #region Signals
+
+        /// <summary>
+        /// Delivers a signal synchronously to every current listener, in registration order. Returns once all listeners have run.<br/>
+        /// Zero listeners is fine (silent). A throwing listener never stops the others (its exception is logged and the rest still run).
+        /// </summary>
+        /// <typeparam name="T">The exact signal type. Dispatch is exact-type only (a derived signal never reaches a base-type
+        /// listener).</typeparam>
+        /// <param name="signal">The signal instance (its fields are the payload).</param>
+        public void Emit<T>(T signal) where T : ISignal
+        {
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
+            _signalRegistrations.TryGetValue(typeof(T), out List<ListenerRegistration> list);
+
+            // Record the emit even when nobody listens, so "nothing happened" is observable on the timeline.
+            DispatchSpan span = null;
+            MonitorBeginDispatch(ref span, EventKind.Signal, typeof(T), signal);
+
+            if (list != null)
+            {
+                _dispatchDepth++;
+                try
+                {
+                    // Snapshot the count so registrations appended during this dispatch are not invoked by it.
+                    int count = list.Count;
+                    for (int i = 0; i < count; i++)
+                    {
+                        ListenerRegistration registration = list[i];
+                        // A registration removed during this dispatch is skipped rather than invoked.
+                        if (!registration.Active)
+                            continue;
+
+                        ListenerSpan listenerSpan = null;
+                        MonitorBeginListener(ref listenerSpan, span, registration);
+                        try
+                        {
+                            // Exact cast back to the concrete delegate type: the payload is never boxed on the hot path.
+                            ((Action<T>)registration.Callback).Invoke(signal);
+                            MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                        }
+                        catch (Exception exception)
+                        {
+                            // Exception isolation: log with the owner as Unity context object, then carry on.
+                            Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+                            MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                        }
+                    }
+                }
+                finally
+                {
+                    _dispatchDepth--;
+                    if (_dispatchDepth == 0)
+                        RemovePendingRemovals();
+                }
+            }
+
+            MonitorEndDispatch(span, DispatchOutcome.Completed);
+        }
+
+        /// <summary>
+        /// Registers a listener for a signal type.
+        /// </summary>
+        /// <typeparam name="T">The exact signal type to listen for.</typeparam>
+        /// <param name="owner">The owner of this registration (powers <see cref="UnregisterAll(object)"/> and diagnostics).</param>
+        /// <param name="listener">The callback invoked on each emit.</param>
+        /// <param name="init">If true and a provider for <typeparamref name="T"/> is alive, the listener is invoked
+        /// immediately with that provider's current value (in addition to future emits). Does nothing if no provider is
+        /// alive. Only sees providers registered <i>before</i> this call.</param>
+        /// <returns>A handle that unregisters this listener when disposed.</returns>
+        public SubscriptionHandle Subscribe<T>(object owner, Action<T> listener, bool init = false) where T : ISignal
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (listener == null)
+                throw new ArgumentNullException(nameof(listener));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
+            Type type = typeof(T);
+            if (!_signalRegistrations.TryGetValue(type, out List<ListenerRegistration> list))
+            {
+                list = new List<ListenerRegistration>();
+                _signalRegistrations[type] = list;
+            }
+
+            ListenerRegistration registration = new ListenerRegistration
+            {
+                Bus = this,
+                EventType = type,
+                Owner = owner,
+                Callback = listener,
+                Active = true,
+            };
+            list.Add(registration);
+            MonitorRegistered(registration);
+
+            // Pull the current value from a live provider, if the caller opted in.
+            if (init && _providers.TryGetValue(type, out ProviderRegistration provider) && provider.Active)
+            {
+                bool pulled = false;
+                T current = default;
+                try
+                {
+                    current = ((Func<T>)provider.Callback).Invoke();
+                    pulled = true;
+                }
+                catch (Exception exception)
+                {
+                    // A throwing provider is isolated like a throwing listener, logged against the provider's owner (not the
+                    // subscriber's): the subscription itself stands, the init pull is just skipped.
+                    Debug.LogException(exception, provider.Owner as UnityEngine.Object);
+                }
+
+                if (pulled)
+                {
+                    try
+                    {
+                        listener.Invoke(current);
+                    }
+                    catch (Exception exception)
+                    {
+                        // Isolate the init call exactly like a dispatched one.
+                        Debug.LogException(exception, owner as UnityEngine.Object);
+                    }
+                }
+            }
+
+            return new SubscriptionHandle(registration);
+        }
+
+        /// <summary>
+        /// Removes a previously registered signal listener, matched by <see cref="Delegate.Equals(object)"/> (target + method, never
+        /// reference equality, so a method group re-created at the call site still matches). Removes the first matching active
+        /// registration.
+        /// </summary>
+        /// <typeparam name="T">The signal type the listener was registered for.</typeparam>
+        /// <param name="listener">The same listener (a method group re-created at the call site still matches).</param>
+        /// <returns>True if a matching registration was found and removed.</returns>
+        public bool Unsubscribe<T>(Action<T> listener) where T : ISignal
+        {
+            if (listener == null)
+                return false;
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
+            if (!_signalRegistrations.TryGetValue(typeof(T), out List<ListenerRegistration> list))
+                return false;
+
+            foreach (ListenerRegistration registration in list)
+            {
+                if (registration.Active && registration.Callback.Equals(listener))
+                {
+                    Remove(registration, RegistrationChangeReason.Unsubscribed);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        #endregion
+
+
+        #region State & providers
+
+        /// <summary>
+        /// Registers a provider for a signal type.<br/>
+        /// The state owner's answer to "what is the current value?". A listener subscribing with <c>init: true</c> pulls this value
+        /// immediately, and <see cref="TryGetCurrent{T}(out T)"/> reads it on demand. The provider is invoked lazily (never cached), so
+        /// its value is never stale, and it dies with its owner.
+        /// </summary>
+        /// <typeparam name="T">The exact signal type this provider supplies the current value for.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="provider">Returns the current value on demand.</param>
+        /// <param name="replace">By default, if you try to add a provider while another one already exists, this call is ignored. If
+        /// enabled, this provider supersedes it.</param>
+        /// <returns>A handle that unregisters this provider when disposed. When a provider already exists and <paramref name="replace"/>
+        /// is <c>false</c>, returns an inactive handle instead.</returns>
+        public SubscriptionHandle Provide<T>(object owner, Func<T> provider, bool replace = false) where T : ISignal
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (provider == null)
+                throw new ArgumentNullException(nameof(provider));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
+            Type type = typeof(T);
+            if (_providers.TryGetValue(type, out ProviderRegistration existing) && existing.Active)
+            {
+                if (!replace)
+                {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    Debug.LogError($"[Broadcaster] A provider for '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
+#endif
+                    MonitorViolation(ViolationKind.MultipleProviders, type, owner);
+                    return default;
+                }
+
+                // Supersede the incumbent: deactivate it so its handle and any pending removal become no-ops, then let the slot be
+                // overwritten below. The outgoing owner's later cleanup won't find it in the slot anymore.
+                existing.Active = false;
+                MonitorUnregistered(existing, RegistrationChangeReason.Replaced);
+            }
+
+            ProviderRegistration registration = new ProviderRegistration
+            {
+                Bus = this,
+                EventType = type,
+                Owner = owner,
+                Callback = provider,
+                Active = true,
+            };
+            _providers[type] = registration;
+            MonitorRegistered(registration);
+            return new SubscriptionHandle(registration);
+        }
+
+        /// <summary>
+        /// Reads the current value for a signal type from its provider, without subscribing. Returns false (and <paramref name="current"/>
+        /// is <c>default</c>) if no provider is alive for the type.
+        /// </summary>
+        /// <typeparam name="T">The signal type to read the current value of.</typeparam>
+        /// <param name="current">The provider's current value, or <c>default</c> if none.</param>
+        /// <returns>True if a provider answered, false otherwise.</returns>
+        public bool TryGetCurrent<T>(out T current) where T : ISignal
+        {
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
+            if (_providers.TryGetValue(typeof(T), out ProviderRegistration provider) && provider.Active)
+            {
+                current = ((Func<T>)provider.Callback).Invoke();
+                return true;
+            }
+
+            current = default;
+            return false;
+        }
+
+        #endregion
+
+
+        #region Commands
+
+        /// <summary>
+        /// Registers the single handler that performs a command. A command has <b>exactly one</b> handler: a second registration for the
+        /// same type is ignored.
+        /// </summary>
+        /// <typeparam name="T">The exact command type to handle.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="handler">Performs the action when the command is ordered.</param>
+        /// <param name="replace">By default, if you try to add a handler while another one already exists, this call is ignored. If
+        /// enabled, this handler supersedes it (for an intentional hand-off, eg. across an additive scene load).</param>
+        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists and <paramref name="replace"/> is
+        /// <c>false</c>, returns an inactive handle instead.</returns>
+        public SubscriptionHandle Obey<T>(object owner, Action<T> handler, bool replace = false) where T : ICommand
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+            return RegisterHandler(typeof(T), owner, handler, replace, async: false, isRequest: false);
+        }
+
+        /// <summary>
+        /// Registers the single <b>async</b> handler that performs a command. A command has <b>exactly one</b> handler: a second
+        /// registration for the same type is ignored. Reachable only through <see cref="OrderAsync{T}(T, CancellationToken)"/> (a
+        /// synchronous <see cref="Order{T}(T)"/> can't wait for it).
+        /// </summary>
+        /// <param name="handler">Performs the action and returns an <see cref="Awaitable"/> that completes when it's done.</param>
+        /// <inheritdoc cref="Obey{T}(object, Action{T}, bool)"/>
+        public SubscriptionHandle Obey<T>(object owner, Func<T, Awaitable> handler, bool replace = false) where T : ICommand
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+            return RegisterHandler(typeof(T), owner, handler, replace, async: true, isRequest: false);
+        }
+
+        /// <summary>
+        /// Registers the single handler that performs a command and reports its outcome. A command has <b>exactly one</b> handler: a second
+        /// registration for the same type is ignored.
+        /// </summary>
+        /// <typeparam name="T">The exact command type to handle.</typeparam>
+        /// <typeparam name="TResult">The outcome the action produces.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="handler">Performs the action and returns its outcome.</param>
+        /// <param name="replace">By default, if you try to add a handler while another one already exists, this call is ignored. If
+        /// enabled, this handler supersedes it (for an intentional hand-off, eg. across an additive scene load).</param>
+        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists and <paramref name="replace"/> is
+        /// <c>false</c>, returns an inactive handle instead.</returns>
+        public SubscriptionHandle Obey<T, TResult>(object owner, Func<T, TResult> handler, bool replace = false) where T : ICommand<TResult>
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+            // Store an invoker typed on the interface so the interface-typed Order can call it back without knowing the concrete command
+            // type (the cast unboxes the command the caller passed as ICommand<TResult>).
+            Func<ICommand<TResult>, TResult> invoker = command => handler((T)command);
+            return RegisterHandler(typeof(T), owner, invoker, replace, async: false, isRequest: false);
+        }
+
+        /// <summary>
+        /// Registers the single <b>async</b> handler that performs a command and reports its outcome. A command has <b>exactly one</b>
+        /// handler: a second registration for the same type is ignored. Reachable only through
+        /// <see cref="OrderAsync{TResult}(ICommand{TResult}, CancellationToken)"/> (a synchronous
+        /// <see cref="Order{TResult}(ICommand{TResult})"/> can't wait for it).
+        /// </summary>
+        /// <param name="handler">Performs the action and returns an <see cref="Awaitable{TResult}"/> carrying its outcome.</param>
+        /// <inheritdoc cref="Obey{T, TResult}(object, Func{T, TResult}, bool)"/>
+        public SubscriptionHandle Obey<T, TResult>(object owner, Func<T, Awaitable<TResult>> handler, bool replace = false) where T : ICommand<TResult>
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+            Func<ICommand<TResult>, Awaitable<TResult>> invoker = command => handler((T)command);
+            return RegisterHandler(typeof(T), owner, invoker, replace, async: true, isRequest: false);
+        }
+
+        /// <summary>
+        /// Orders a command, invoking its single handler synchronously. Returns whether a handler performed it. With no handler
+        /// registered, logs a dev-build error and returns <c>false</c>.
+        /// </summary>
+        /// <typeparam name="T">The exact command type.</typeparam>
+        /// <param name="command">The command instance (its fields are the payload).</param>
+        /// <returns>True if a handler performed the command.</returns>
+        public bool Order<T>(T command) where T : ICommand
+        {
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
+            DispatchSpan span = null;
+            MonitorBeginDispatch(ref span, EventKind.Command, typeof(T), command);
+
+            if (_handlers.TryGetValue(typeof(T), out HandlerRegistration registration) && registration.Active)
+            {
+                if (registration.Async)
+                {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    Debug.LogError($"[Broadcaster] The handler for command '{typeof(T).Name}' is asynchronous and can't be run synchronously. Use OrderAsync.");
+#endif
+                    MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, typeof(T), span);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    return false;
+                }
+
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    ((Action<T>)registration.Callback).Invoke(command);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw;
+                }
+                return true;
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.LogError($"[Broadcaster] No handler is registered for command '{typeof(T).Name}'. The command was not performed.");
+#endif
+            MonitorDispatchViolation(ViolationKind.UnhandledCommand, typeof(T), span);
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+            return false;
+        }
+
+        /// <summary>
+        /// Orders a command and returns the outcome its handler produced, invoked synchronously. A handler is mandatory: with none
+        /// registered this throws (a valued order has no outcome to report without one).
+        /// </summary>
+        /// <typeparam name="TResult">The outcome the action produces.</typeparam>
+        /// <param name="command">The command instance, typed as its interface so <typeparamref name="TResult"/> is inferred at the call
+        /// site.</param>
+        /// <returns>The outcome the handler produced.</returns>
+        /// <exception cref="InvalidOperationException">No handler is registered for the command type.</exception>
+        public TResult Order<TResult>(ICommand<TResult> command)
+        {
+            if (command == null)
+                throw new ArgumentNullException(nameof(command));
+
+            MainThreadGuard.Assert();
+
+            Type type = command.GetType();
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Command, type, command);
+
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
+            {
+                if (registration.Async)
+                {
+                    MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, type, span);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw new InvalidOperationException($"The handler for command '{type.Name}' is asynchronous and can't be run synchronously. Use OrderAsync.");
+                }
+
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    TResult result = ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                    return result;
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw;
+                }
+            }
+
+            MonitorDispatchViolation(ViolationKind.UnhandledCommand, type, span);
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+            throw new InvalidOperationException($"No handler is registered for command '{type.Name}', which must report a {typeof(TResult).Name}.");
+        }
+
+        /// <summary>
+        /// Orders a command and awaits its completion. Works on both sync and async handlers (a sync handler completes immediately). The
+        /// awaitable resolves as cancelled if <paramref name="cancellation"/> fires or if the handler is unregistered before it finishes,
+        /// and faulted if the handler throws (it never hangs).
+        /// </summary>
+        /// <param name="cancellation">Cancels the caller's wait (the handler itself manages its own cancellation).</param>
+        /// <returns>An awaitable that completes when the handler finishes. Completes immediately (dev-build error) when no handler is
+        /// registered. There is no outcome to report for a void command.</returns>
+        /// <inheritdoc cref="Order{T}(T)"/>
+        public Awaitable OrderAsync<T>(T command, CancellationToken cancellation = default) where T : ICommand
+        {
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
+            if (cancellation.IsCancellationRequested)
+            {
+                MonitorSyncDispatch(EventKind.Command, typeof(T), command, DispatchOutcome.Cancelled);
+                return CanceledAwaitable();
+            }
+
+            DispatchSpan span = null;
+            MonitorBeginDispatch(ref span, EventKind.Command, typeof(T), command);
+
+            if (_handlers.TryGetValue(typeof(T), out HandlerRegistration registration) && registration.Active)
+            {
+                if (registration.Async)
+                {
+                    // Async block: the span and its sub-span stay open until the bridged awaitable resolves.
+                    Awaitable bridged = BridgeAwaitable(() => ((Func<T, Awaitable>)registration.Callback).Invoke(command), registration, cancellation, span);
+                    MonitorRestoreAmbient(span);
+                    return bridged;
+                }
+
+                // A sync handler through the async verb: run it now and hand back an already-completed (or faulted) awaitable.
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    ((Action<T>)registration.Callback).Invoke(command);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                    return CompletedAwaitable();
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    return FaultedAwaitable(exception);
+                }
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.LogError($"[Broadcaster] No handler is registered for command '{typeof(T).Name}'. The command was not performed.");
+#endif
+            MonitorDispatchViolation(ViolationKind.UnhandledCommand, typeof(T), span);
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+            return CompletedAwaitable();
+        }
+
+        /// <summary>
+        /// Orders a command and awaits the outcome its handler produces. Works on both sync and async handlers (a sync handler completes
+        /// immediately). The awaitable resolves as cancelled if <paramref name="cancellation"/> fires or if the handler is unregistered
+        /// before it finishes, and faulted if the handler throws or no handler is registered (it never hangs).
+        /// </summary>
+        /// <param name="cancellation">Cancels the caller's wait (the handler itself manages its own cancellation).</param>
+        /// <returns>An awaitable carrying the handler's outcome.</returns>
+        /// <inheritdoc cref="Order{TResult}(ICommand{TResult})"/>
+        public Awaitable<TResult> OrderAsync<TResult>(ICommand<TResult> command, CancellationToken cancellation = default)
+        {
+            if (command == null)
+                throw new ArgumentNullException(nameof(command));
+
+            MainThreadGuard.Assert();
+
+            if (cancellation.IsCancellationRequested)
+            {
+                MonitorSyncDispatchBoxed(EventKind.Command, command.GetType(), command, DispatchOutcome.Cancelled);
+                return CanceledAwaitable<TResult>();
+            }
+
+            Type type = command.GetType();
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Command, type, command);
+
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
+            {
+                if (registration.Async)
+                {
+                    // Async block: the span and its sub-span stay open until the bridged awaitable resolves.
+                    Awaitable<TResult> bridged = BridgeAwaitable(() => ((Func<ICommand<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(command), registration, cancellation, span);
+                    MonitorRestoreAmbient(span);
+                    return bridged;
+                }
+
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    TResult result = ((Func<ICommand<TResult>, TResult>)registration.Callback).Invoke(command);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                    return CompletedAwaitable(result);
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    return FaultedAwaitable<TResult>(exception);
+                }
+            }
+
+            MonitorDispatchViolation(ViolationKind.UnhandledCommand, type, span);
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+            return FaultedAwaitable<TResult>(new InvalidOperationException($"No handler is registered for command '{type.Name}', which must report a {typeof(TResult).Name}."));
+        }
+
+        #endregion
+
+
+        #region Requests
+
+        /// <summary>
+        /// Registers the single handler that answers a request. A request has <b>exactly one</b> handler: a second registration for the
+        /// same type is ignored.
+        /// </summary>
+        /// <typeparam name="T">The exact request type to answer.</typeparam>
+        /// <typeparam name="TResult">The type of the answer.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="handler">Produces the answer. By convention it must not mutate state (asking is always safe).</param>
+        /// <param name="replace">By default, if you try to add a handler while another one already exists, this call is ignored. If
+        /// enabled, this handler supersedes it (for an intentional hand-off, eg. across an additive scene load).</param>
+        /// <returns>A handle that unregisters this handler when disposed. When a handler already exists and <paramref name="replace"/> is
+        /// <c>false</c>, returns an inactive handle instead.</returns>
+        public SubscriptionHandle Answer<T, TResult>(object owner, Func<T, TResult> handler, bool replace = false) where T : IRequest<TResult>
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+            // Same interface-typed invoker trick as commands, so the interface-typed Ask can call back without the concrete request type.
+            Func<IRequest<TResult>, TResult> invoker = request => handler((T)request);
+            return RegisterHandler(typeof(T), owner, invoker, replace, async: false, isRequest: true);
+        }
+
+        /// <summary>
+        /// Registers the single <b>async</b> handler that answers a request. A request has <b>exactly one</b> handler: a second
+        /// registration for the same type is ignored. Reachable only through
+        /// <see cref="AskAsync{TResult}(IRequest{TResult}, CancellationToken)"/> (a synchronous
+        /// <see cref="Ask{TResult}(IRequest{TResult})"/> can't wait for it).
+        /// </summary>
+        /// <param name="handler">Produces the answer as an <see cref="Awaitable{TResult}"/>. By convention it must not mutate state.</param>
+        /// <inheritdoc cref="Answer{T, TResult}(object, Func{T, TResult}, bool)"/>
+        public SubscriptionHandle Answer<T, TResult>(object owner, Func<T, Awaitable<TResult>> handler, bool replace = false) where T : IRequest<TResult>
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+            Func<IRequest<TResult>, Awaitable<TResult>> invoker = request => handler((T)request);
+            return RegisterHandler(typeof(T), owner, invoker, replace, async: true, isRequest: true);
+        }
+
+        /// <summary>
+        /// Asks a request and returns its handler's answer, invoked synchronously. A handler is mandatory: with none registered this
+        /// throws (a question with no answer has no value to return). Use <see cref="TryAsk{TResult}(IRequest{TResult}, out TResult)"/> to
+        /// tolerate an unanswered request.
+        /// </summary>
+        /// <typeparam name="TResult">The type of the answer.</typeparam>
+        /// <param name="request">The request instance, typed as its interface so <typeparamref name="TResult"/> is inferred at the call
+        /// site.</param>
+        /// <returns>The handler's answer.</returns>
+        /// <exception cref="InvalidOperationException">No handler is registered for the request type.</exception>
+        public TResult Ask<TResult>(IRequest<TResult> request)
+        {
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+
+            MainThreadGuard.Assert();
+
+            Type type = request.GetType();
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Request, type, request);
+
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
+            {
+                if (registration.Async)
+                {
+                    MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, type, span);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw new InvalidOperationException($"The handler for request '{type.Name}' is asynchronous and can't be run synchronously. Use AskAsync.");
+                }
+
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    TResult result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                    return result;
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw;
+                }
+            }
+
+            MonitorDispatchViolation(ViolationKind.UnansweredRequest, type, span);
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+            throw new InvalidOperationException($"No handler is registered to answer request '{type.Name}'.");
+        }
+
+        /// <summary>
+        /// Asks a request without requiring an answer. Returns whether a handler answered. <paramref name="result"/> is the answer, or
+        /// <c>default</c> if none.
+        /// </summary>
+        /// <typeparam name="TResult">The type of the answer.</typeparam>
+        /// <param name="request">The request instance.</param>
+        /// <param name="result">The handler's answer, or <c>default</c> if no handler is registered.</param>
+        /// <returns>True if a handler answered.</returns>
+        public bool TryAsk<TResult>(IRequest<TResult> request, out TResult result)
+        {
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+
+            MainThreadGuard.Assert();
+
+            Type type = request.GetType();
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Request, type, request);
+
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
+            {
+                if (registration.Async)
+                {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    Debug.LogError($"[Broadcaster] The handler for request '{type.Name}' is asynchronous and can't be answered synchronously. Use AskAsync.");
+#endif
+                    MonitorDispatchViolation(ViolationKind.SyncCallOnAsyncHandler, type, span);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    result = default;
+                    return false;
+                }
+
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    throw;
+                }
+                return true;
+            }
+
+            // A tolerant miss is not a fault: the ask completed, nothing answered.
+            MonitorEndDispatch(span, DispatchOutcome.Completed);
+            result = default;
+            return false;
+        }
+
+        /// <summary>
+        /// Asks a request and awaits its handler's answer. Works on both sync and async handlers (a sync handler completes immediately).
+        /// The awaitable resolves as cancelled if <paramref name="cancellation"/> fires or if the handler is unregistered before it
+        /// answers, and faulted if the handler throws or no handler is registered (it never hangs).
+        /// </summary>
+        /// <param name="cancellation">Cancels the caller's wait (the handler itself manages its own cancellation).</param>
+        /// <returns>An awaitable carrying the handler's answer.</returns>
+        /// <inheritdoc cref="Ask{TResult}(IRequest{TResult})"/>
+        public Awaitable<TResult> AskAsync<TResult>(IRequest<TResult> request, CancellationToken cancellation = default)
+        {
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+
+            MainThreadGuard.Assert();
+
+            if (cancellation.IsCancellationRequested)
+            {
+                MonitorSyncDispatchBoxed(EventKind.Request, request.GetType(), request, DispatchOutcome.Cancelled);
+                return CanceledAwaitable<TResult>();
+            }
+
+            Type type = request.GetType();
+            DispatchSpan span = null;
+            MonitorBeginDispatchBoxed(ref span, EventKind.Request, type, request);
+
+            if (_handlers.TryGetValue(type, out HandlerRegistration registration) && registration.Active)
+            {
+                if (registration.Async)
+                {
+                    // Async block: the span and its sub-span stay open until the bridged awaitable resolves.
+                    Awaitable<TResult> bridged = BridgeAwaitable(() => ((Func<IRequest<TResult>, Awaitable<TResult>>)registration.Callback).Invoke(request), registration, cancellation, span);
+                    MonitorRestoreAmbient(span);
+                    return bridged;
+                }
+
+                ListenerSpan listenerSpan = null;
+                MonitorBeginListener(ref listenerSpan, span, registration);
+                try
+                {
+                    TResult result = ((Func<IRequest<TResult>, TResult>)registration.Callback).Invoke(request);
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Completed, null);
+                    MonitorEndDispatch(span, DispatchOutcome.Completed);
+                    return CompletedAwaitable(result);
+                }
+                catch (Exception exception)
+                {
+                    MonitorEndListener(listenerSpan, DispatchOutcome.Faulted, exception);
+                    MonitorEndDispatch(span, DispatchOutcome.Faulted);
+                    return FaultedAwaitable<TResult>(exception);
+                }
+            }
+
+            MonitorDispatchViolation(ViolationKind.UnansweredRequest, type, span);
+            MonitorEndDispatch(span, DispatchOutcome.Faulted);
+            return FaultedAwaitable<TResult>(new InvalidOperationException($"No handler is registered to answer request '{type.Name}'."));
+        }
+
+        #endregion
+
+
+        #region Cues
+
+        /// <summary>
+        /// Registers an <b>instant</b> performer for a cue type. It runs synchronously when the cue is sent and completes immediately.
+        /// </summary>
+        /// <typeparam name="T">The exact cue type to perform.</typeparam>
+        /// <param name="owner">The owner of this registration.</param>
+        /// <param name="performer">The reaction, run synchronously on each cue.</param>
+        /// <returns>A handle that unregisters this performer when disposed.</returns>
+        public SubscriptionHandle Perform<T>(object owner, Action<T> performer) where T : ICue
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (performer == null)
+                throw new ArgumentNullException(nameof(performer));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+            return AddPerformer(typeof(T), owner, performer);
+        }
+
+        /// <summary>
+        /// Registers a <b>durative</b> performer for a cue type. It starts synchronously when the cue is sent and returns an
+        /// <see cref="Awaitable"/> that completes when its reaction finishes; the cue's completion waits for it.
+        /// </summary>
+        /// <param name="performer">The reaction; its first synchronous stretch runs on send, and the returned awaitable marks
+        /// completion.</param>
+        /// <returns>A handle that unregisters this performer when disposed.</returns>
+        /// <inheritdoc cref="Perform{T}(object, Action{T})"/>
+        public SubscriptionHandle Perform<T>(object owner, Func<T, Awaitable> performer) where T : ICue
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (performer == null)
+                throw new ArgumentNullException(nameof(performer));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+            return AddPerformer(typeof(T), owner, performer);
+        }
+
+        /// <summary>
+        /// Registers a <b>callback-style</b> performer for a cue type, for coroutine/callback code that doesn't want to author an
+        /// <see cref="Awaitable"/>. It starts synchronously and receives a <c>done</c> callback it must invoke when its reaction finishes;
+        /// the cue's completion waits for that call.
+        /// </summary>
+        /// <param name="performer">The reaction, receiving the cue and a <c>done</c> callback. It must eventually call <c>done</c> or the
+        /// cue never completes for this performer (until the performer is unregistered).</param>
+        /// <returns>A handle that unregisters this performer when disposed.</returns>
+        /// <inheritdoc cref="Perform{T}(object, Action{T})"/>
+        public SubscriptionHandle Perform<T>(object owner, CuePerformerDelegate<T> performer) where T : ICue
+        {
+            if (owner == null)
+                throw new ArgumentNullException(nameof(owner));
+            if (performer == null)
+                throw new ArgumentNullException(nameof(performer));
+
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+            return AddPerformer(typeof(T), owner, performer);
+        }
+
+        /// <summary>
+        /// Sends a cue: every current performer <b>starts synchronously in registration order</b> (an instant performer runs fully, a
+        /// durative/callback one runs its synchronous stretch), then the returned awaitable resolves when the <b>last</b> performer
+        /// finishes (when-all). Zero performers resolves instantly.<br/>
+        /// A throwing performer is isolated (logged with its owner as context) and neither holds up nor kills the others. The awaitable
+        /// resolves as cancelled if <paramref name="cancellation"/> fires (the cancellation fans out to every in-flight performer). A
+        /// performer unregistered mid-cue resolves rather than hanging; the cue still completes on the rest.
+        /// </summary>
+        /// <typeparam name="T">The exact cue type.</typeparam>
+        /// <param name="cue">The cue instance (its fields are the payload).</param>
+        /// <param name="cancellation">Cancels the cue: resolves the awaitable as cancelled and fans out to every in-flight performer.</param>
+        /// <returns>An awaitable that completes when every performer has finished.</returns>
+        public Awaitable Cue<T>(T cue, CancellationToken cancellation = default) where T : ICue
+        {
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
+            if (cancellation.IsCancellationRequested)
+            {
+                MonitorSyncDispatch(EventKind.Cue, typeof(T), cue, DispatchOutcome.Cancelled);
+                return CanceledAwaitable();
+            }
+
+            if (!_cuePerformers.TryGetValue(typeof(T), out List<PerformerRegistration> list) || list.Count == 0)
+            {
+                MonitorSyncDispatch(EventKind.Cue, typeof(T), cue, DispatchOutcome.Completed);
+                return CompletedAwaitable();
+            }
+
+            DispatchSpan span = null;
+            MonitorBeginDispatch(ref span, EventKind.Cue, typeof(T), cue);
+
+            AwaitableCompletionSource completion = new AwaitableCompletionSource();
+            bool resolved = false;
+
+            // When-all accounting. A "starting" guard (+1) keeps the count above zero while performers are still being started, so an
+            // instant performer completing synchronously mid-loop can't resolve the cue before the later performers have even begun.
+            // The cancellation fan-out is what each performer registers below; when the token fires it drains every in-flight slot, so the
+            // cue resolves here. The last slot to drain decides completed vs cancelled by inspecting the token (a cancelled token means the
+            // drain was the fan-out, not natural completion, which also avoids depending on the order the token invokes its callbacks).
+            int outstanding = 1;
+            void OnPerformerDone()
+            {
+                outstanding--;
+                if (outstanding == 0 && !resolved)
+                {
+                    resolved = true;
+                    if (cancellation.IsCancellationRequested)
+                    {
+                        completion.TrySetCanceled();
+                        MonitorCompleteDispatch(span, DispatchOutcome.Cancelled);
+                    }
+                    else
+                    {
+                        completion.TrySetResult();
+                        MonitorCompleteDispatch(span, DispatchOutcome.Completed);
+                    }
+                }
+            }
+
+            // Guard the enumeration: an instant performer that unregisters another during its synchronous run defers the structural edit.
+            _dispatchDepth++;
+            try
+            {
+                int count = list.Count;
+                for (int i = 0; i < count; i++)
+                {
+                    PerformerRegistration registration = list[i];
+                    if (!registration.Active)
+                        continue;
+
+                    outstanding++;
+                    ListenerSpan performerSpan = null;
+                    MonitorBeginListener(ref performerSpan, span, registration);
+                    StartCuePerformer(registration, cue, cancellation, OnPerformerDone, performerSpan);
+                }
+            }
+            finally
+            {
+                _dispatchDepth--;
+                if (_dispatchDepth == 0)
+                    RemovePendingRemovals();
+            }
+
+            // The synchronous start is over: restore the ambient span (the cue's span stays open until when-all completes).
+            MonitorRestoreAmbient(span);
+
+            // Release the starting guard: if every performer already finished (all instant, or none active), the cue resolves now.
+            OnPerformerDone();
+            return completion.Awaitable;
+        }
+
+        #endregion
+
+
+        #region Cleanup
+
+        /// <summary>
+        /// Removes <b>every</b> registration made by the given owner.
+        /// </summary>
+        /// <param name="owner">The owner whose registrations to remove (compared by reference).</param>
+        /// <returns>The number of registrations removed.</returns>
+        public int UnregisterAll(object owner)
+        {
+            if (owner == null)
+                return 0;
+
+            MainThreadGuard.Assert();
+
+            // Snapshot the owner's registrations before removing anything: removing one can resolve an in-flight async dispatch,
+            // which resumes its awaiting caller synchronously (and that code may re-register on this bus), which would corrupt an
+            // enumeration still walking the stores. No user-authored code can run during this collection pass.
+            List<Registration> owned = new List<Registration>();
+            foreach (List<ListenerRegistration> list in _signalRegistrations.Values)
+            {
+                foreach (Registration registration in list)
+                {
+                    if (registration.Active && ReferenceEquals(registration.Owner, owner))
+                        owned.Add(registration);
+                }
+            }
+
+            foreach (List<PerformerRegistration> list in _cuePerformers.Values)
+            {
+                foreach (Registration registration in list)
+                {
+                    if (registration.Active && ReferenceEquals(registration.Owner, owner))
+                        owned.Add(registration);
+                }
+            }
+
+            foreach (Registration provider in _providers.Values)
+            {
+                if (provider.Active && ReferenceEquals(provider.Owner, owner))
+                    owned.Add(provider);
+            }
+
+            foreach (Registration handler in _handlers.Values)
+            {
+                if (handler.Active && ReferenceEquals(handler.Owner, owner))
+                    owned.Add(handler);
+            }
+
+            int removed = 0;
+            foreach (Registration registration in owned)
+            {
+                // Code resumed by an earlier removal in this loop may have removed this registration already; don't count it twice.
+                if (!registration.Active)
+                    continue;
+
+                Remove(registration, RegistrationChangeReason.RemovedByOwner);
+                removed++;
+            }
+            return removed;
+        }
+
+        /// <summary>
+        /// Hard reset: removes every registration of every kind. The bus stores no payloads, so there is nothing else to clear.
+        /// </summary>
+        public void Clear()
+        {
+            MainThreadGuard.Assert();
+
+            // Snapshot everything before touching anything: resolving the in-flight slots below resumes awaiting callers
+            // synchronously, and those may re-register on this bus. The stores must not be under enumeration when that happens.
+            List<Registration> all = new List<Registration>();
+            foreach (List<ListenerRegistration> list in _signalRegistrations.Values)
+                all.AddRange(list);
+            foreach (List<PerformerRegistration> list in _cuePerformers.Values)
+                all.AddRange(list);
+            all.AddRange(_providers.Values);
+            all.AddRange(_handlers.Values);
+
+            // Deactivate first so any dispatch in progress skips the rest of its listeners (the list objects it captured stay
+            // alive), then empty the stores. The monitor collects the ones that are still active beforehand, so it reports each
+            // exactly once (an already-inactive registration was reported when it was removed).
+            List<Registration> cleared = null;
+            MonitorCollectActive(all, ref cleared);
+            foreach (Registration registration in all)
+                registration.Active = false;
+
+            _signalRegistrations.Clear();
+            _cuePerformers.Clear();
+            _providers.Clear();
+            _handlers.Clear();
+            _pendingRemovals.Clear();
+
+            // Resolve the in-flight slots last (cue performers mid-cue, handlers mid-order/ask), so any awaiting caller completes
+            // rather than hanging. Anything the resumed code re-registers lands in the freshly emptied stores and is kept.
+            foreach (Registration registration in all)
+                registration.CancelInFlight();
+
+            // Reported after the wipe, so a hook consumer that re-registers is kept (like a resumed caller), not wiped.
+            MonitorReportCleared(cleared);
+        }
+
+        /// <summary>
+        /// Removes every registration for a single event type.
+        /// </summary>
+        /// <typeparam name="T">The event type to clear.</typeparam>
+        public void Clear<T>() where T : IEvent
+        {
+            MainThreadGuard.Assert();
+            EventTypeGuard.Assert<T>();
+
+            Type type = typeof(T);
+
+            // Detach and deactivate everything for the type first, and only then resolve the in-flight slots: resolving resumes awaiting
+            // callers synchronously, and those must already see a bus without these registrations (they may freely re-register, never the
+            // detached one). Deactivating first also makes any dispatch in progress skip these registrations (the list objects it captured
+            // stay alive).
+            _signalRegistrations.TryGetValue(type, out List<ListenerRegistration> listeners);
+            _signalRegistrations.Remove(type);
+            _cuePerformers.TryGetValue(type, out List<PerformerRegistration> performers);
+            _cuePerformers.Remove(type);
+            _providers.TryGetValue(type, out ProviderRegistration provider);
+            _providers.Remove(type);
+            _handlers.TryGetValue(type, out HandlerRegistration handler);
+            _handlers.Remove(type);
+
+            // The monitor collects the still-active registrations before the wipe, so it reports each exactly once (an
+            // already-inactive registration was reported when it was removed).
+            List<Registration> cleared = null;
+            MonitorCollectActive(listeners, ref cleared);
+            MonitorCollectActive(performers, ref cleared);
+            MonitorCollectActive(provider, ref cleared);
+            MonitorCollectActive(handler, ref cleared);
+
+            if (listeners != null)
+            {
+                foreach (Registration registration in listeners)
+                    registration.Active = false;
+            }
+            if (performers != null)
+            {
+                foreach (Registration registration in performers)
+                    registration.Active = false;
+            }
+            if (provider != null)
+                provider.Active = false;
+            if (handler != null)
+                handler.Active = false;
+
+            // Resolve any in-flight cue or async order/ask on the cleared registrations so awaiting callers complete rather than
+            // hanging.
+            if (performers != null)
+            {
+                foreach (Registration registration in performers)
+                    registration.CancelInFlight();
+            }
+            if (handler != null)
+                handler.CancelInFlight();
+
+            // Reported after the wipe, so a hook consumer that re-registers is kept (like a resumed caller), not wiped.
+            MonitorReportCleared(cleared);
+        }
+
+        #endregion
+
+
+        #region Internal
+
+        /// <summary>
+        /// Stores a command or request handler in the single-handler slot for its type, enforcing the exactly-one rule. If an active
+        /// handler already occupies the slot and <paramref name="replace"/> is <c>false</c>, logs a dev-build diagnostic and returns an
+        /// inactive handle (the first stays authoritative); with <paramref name="replace"/> <c>true</c>, the incumbent is superseded.
+        /// </summary>
+        private SubscriptionHandle RegisterHandler(Type type, object owner, Delegate callback, bool replace, bool async, bool isRequest)
+        {
+            if (_handlers.TryGetValue(type, out HandlerRegistration existing) && existing.Active)
+            {
+                if (!replace)
+                {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    Debug.LogError($"[Broadcaster] A handler for {(isRequest ? "request" : "command")} '{type.Name}' is already registered. The existing one stays authoritative and this registration is ignored. Pass replace: true for an intentional hand-off.", owner as UnityEngine.Object);
+#endif
+                    MonitorViolation(ViolationKind.MultipleHandlers, type, owner);
+                    return default;
+                }
+
+                // Supersede the incumbent: deactivate it so its handle and any pending removal become no-ops, then let the slot be
+                // overwritten below. The outgoing owner's later cleanup won't find it in the slot anymore.
+                existing.Active = false;
+                // The superseded handler is gone, so resolve anyone still awaiting it rather than leaving them hung.
+                existing.CancelInFlight();
+                MonitorUnregistered(existing, RegistrationChangeReason.Replaced);
+            }
+
+            HandlerRegistration registration = new HandlerRegistration
+            {
+                Bus = this,
+                EventType = type,
+                Owner = owner,
+                Callback = callback,
+                Active = true,
+                Async = async,
+                IsRequest = isRequest,
+            };
+            _handlers[type] = registration;
+            MonitorRegistered(registration);
+            return new SubscriptionHandle(registration);
+        }
+
+        /// <summary>
+        /// Appends a cue performer to the per-type performer list (creating the list on first use). The <paramref name="callback"/> is one
+        /// of the three performer shapes (<see cref="Action{T}"/>, <see cref="Func{T, Awaitable}"/>, or
+        /// <c>Action&lt;T, Action&gt;</c>); <see cref="StartCuePerformer{T}"/> dispatches on its concrete type.
+        /// </summary>
+        private SubscriptionHandle AddPerformer(Type type, object owner, Delegate callback)
+        {
+            if (!_cuePerformers.TryGetValue(type, out List<PerformerRegistration> list))
+            {
+                list = new List<PerformerRegistration>();
+                _cuePerformers[type] = list;
+            }
+
+            PerformerRegistration registration = new PerformerRegistration
+            {
+                Bus = this,
+                EventType = type,
+                Owner = owner,
+                Callback = callback,
+                Active = true,
+            };
+            list.Add(registration);
+            MonitorRegistered(registration);
+            return new SubscriptionHandle(registration);
+        }
+
+        /// <summary>
+        /// Starts one cue performer synchronously and arranges for <paramref name="onDone"/> to be called exactly once when it finishes,
+        /// whether it completes, faults (isolated: logged, still counts as done), is cancelled by <paramref name="cancellation"/>, or is
+        /// unregistered mid-cue. Dispatches on the performer's concrete delegate type.
+        /// </summary>
+        private void StartCuePerformer<T>(PerformerRegistration registration, T cue, CancellationToken cancellation, Action onDone, ListenerSpan listenerSpan) where T : ICue
+        {
+            bool done = false;
+            CancellationTokenRegistration tokenRegistration = default;
+            // How this performer finished and its fault, if any: set by whichever terminal path fires, read when its sub-span closes.
+            DispatchOutcome outcome = DispatchOutcome.Completed;
+            Exception fault = null;
+
+            // Called on every terminal path (completion, fault, cancel, unregister); idempotent. Unhooks this performer's cancellation and
+            // disposes its token registration, so every path cleans up exactly once.
+            Action resolve = null;
+            // The cancellation-flavoured terminal that the fan-out token and a mid-cue unregister invoke: records the cancelled outcome,
+            // then funnels into the shared terminal above.
+            Action cancelResolve = null;
+            resolve = () =>
+            {
+                if (done)
+                    return;
+                done = true;
+                registration.PendingCancellations?.Remove(cancelResolve);
+                tokenRegistration.Dispose();
+                MonitorEndListener(listenerSpan, outcome, fault);
+                onDone();
+            };
+            cancelResolve = () =>
+            {
+                outcome = DispatchOutcome.Cancelled;
+                resolve();
+            };
+
+            // Never-hangs: unregistering this performer mid-cue fires cancelResolve, so the cue's when-all doesn't wait on a gone performer.
+            (registration.PendingCancellations ??= new List<Action>()).Add(cancelResolve);
+            // Cancellation fan-out: the cue's token resolves this performer's slot too (the cue as a whole is cancelled at the send level).
+            tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancelResolve) : default;
+
+            // Registering the token may have fired cancelResolve synchronously (already-cancelled token), before the assignment above
+            // captured the registration (so dispose it here and don't start the performer).
+            if (done)
+            {
+                tokenRegistration.Dispose();
+                return;
+            }
+
+            switch (registration.Callback)
+            {
+                // Instant: runs fully synchronously, then completes.
+                case Action<T> instant:
+                    try
+                    {
+                        instant.Invoke(cue);
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+                        outcome = DispatchOutcome.Faulted;
+                        fault = exception;
+                    }
+                    resolve();
+                    break;
+
+                // Durative: starts synchronously and returns an awaitable; the cue waits for it.
+                case Func<T, Awaitable> durative:
+                    Awaitable inner;
+                    try
+                    {
+                        inner = durative.Invoke(cue);
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+                        outcome = DispatchOutcome.Faulted;
+                        fault = exception;
+                        resolve();
+                        break;
+                    }
+                    Pump(inner);
+                    break;
+
+                // Callback-style: runs synchronously and is handed a `done` callback that resolves this performer when invoked.
+                case CuePerformerDelegate<T> callback:
+                    try
+                    {
+                        callback.Invoke(cue, resolve);
+                    }
+                    catch (Exception exception)
+                    {
+                        // A throw during the synchronous stretch is isolated and completes the performer, exactly like the other shapes.
+                        Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+                        outcome = DispatchOutcome.Faulted;
+                        fault = exception;
+                        resolve();
+                    }
+                    // No resolve() on the happy path: completion is when the performer calls `done` (or is cancelled/unregistered).
+                    break;
+            }
+
+            // Awaits a durative performer's awaitable off the bus, isolating faults and resolving the performer's slot when it settles.
+            async void Pump(Awaitable awaitable)
+            {
+                try
+                {
+                    await awaitable;
+                }
+                catch (OperationCanceledException)
+                {
+                    // The performer honoured a cancellation; its slot still resolves so the cue's when-all proceeds.
+                    outcome = DispatchOutcome.Cancelled;
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, registration.Owner as UnityEngine.Object);
+                    outcome = DispatchOutcome.Faulted;
+                    fault = exception;
+                }
+                finally
+                {
+                    resolve();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Marks a registration inactive and removes it (immediately when no dispatch is in progress), otherwise deferred until the
+        /// outermost dispatch ends.
+        /// </summary>
+        internal void Remove(Registration registration, RegistrationChangeReason reason)
+        {
+            if (registration == null || !registration.Active)
+                return;
+
+            registration.Active = false;
+            MonitorUnregistered(registration, reason);
+            // Never-hangs: resolve anyone still awaiting this registration now that it's gone.
+            registration.CancelInFlight();
+            if (_dispatchDepth > 0)
+                _pendingRemovals.Add(registration);
+            else
+                RemoveFromStore(registration);
+        }
+
+        /// <summary>
+        /// Physically removes a registration from its store (each concrete registration type maps to exactly one) dropping an emptied list
+        /// entry.
+        /// </summary>
+        private void RemoveFromStore(Registration registration)
+        {
+            switch (registration)
+            {
+                case ListenerRegistration listener:
+                    if (_signalRegistrations.TryGetValue(listener.EventType, out List<ListenerRegistration> listeners))
+                    {
+                        listeners.Remove(listener);
+                        if (listeners.Count == 0)
+                            _signalRegistrations.Remove(listener.EventType);
+                    }
+                    break;
+
+                case ProviderRegistration provider:
+                    // Only drop the slot if it still points at this exact registration (a newer provider may have replaced it while this
+                    // one was pending removal.
+                    if (_providers.TryGetValue(provider.EventType, out ProviderRegistration currentProvider) && currentProvider == provider)
+                        _providers.Remove(provider.EventType);
+                    break;
+
+                case HandlerRegistration handler:
+                    // Same slot guard as providers: only drop it if this exact handler still occupies it.
+                    if (_handlers.TryGetValue(handler.EventType, out HandlerRegistration currentHandler) && currentHandler == handler)
+                        _handlers.Remove(handler.EventType);
+                    break;
+
+                case PerformerRegistration performer:
+                    if (_cuePerformers.TryGetValue(performer.EventType, out List<PerformerRegistration> performers))
+                    {
+                        performers.Remove(performer);
+                        if (performers.Count == 0)
+                            _cuePerformers.Remove(performer.EventType);
+                    }
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Physically removes everything deactivated during the dispatch that just ended.
+        /// </summary>
+        private void RemovePendingRemovals()
+        {
+            if (_pendingRemovals.Count == 0)
+                return;
+
+            foreach (Registration registration in _pendingRemovals)
+                RemoveFromStore(registration);
+            _pendingRemovals.Clear();
+        }
+
+        /// <summary>
+        /// Bridges a durative command handler's <see cref="Awaitable"/> into one the bus controls, so the caller's wait resolves on
+        /// completion, on cancellation, on a handler fault, or on the handler being unregistered mid-flight (never hanging).
+        /// </summary>
+        private Awaitable BridgeAwaitable(Func<Awaitable> invoke, HandlerRegistration registration, CancellationToken cancellation, DispatchSpan span)
+        {
+            AwaitableCompletionSource source = new AwaitableCompletionSource();
+            bool resolved = false;
+            Action cancel = null;
+            CancellationTokenRegistration tokenRegistration = default;
+            ListenerSpan listenerSpan = null;
+
+            // Every terminal path funnels through here so the caller's awaitable (and the monitor spans) settle exactly once and the
+            // bus/token registrations are cleaned up.
+            void Resolve(DispatchOutcome outcome, Exception exception)
+            {
+                if (resolved)
+                    return;
+                resolved = true;
+
+                if (outcome == DispatchOutcome.Cancelled)
+                    source.TrySetCanceled();
+                else if (outcome == DispatchOutcome.Faulted)
+                    source.TrySetException(exception);
+                else
+                    source.TrySetResult();
+
+                MonitorEndListener(listenerSpan, outcome, exception);
+                MonitorCompleteDispatch(span, outcome);
+
+                registration.PendingCancellations?.Remove(cancel);
+                tokenRegistration.Dispose();
+            }
+
+            // Never-hangs + cancellation fan-out: unregistering the handler mid-flight, or the caller's token firing, cancels the wait.
+            cancel = () => Resolve(DispatchOutcome.Cancelled, null);
+            (registration.PendingCancellations ??= new List<Action>()).Add(cancel);
+            tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancel) : default;
+
+            // Registering may have fired cancel synchronously (token already cancelled).
+            if (resolved)
+            {
+                tokenRegistration.Dispose();
+                return source.Awaitable;
+            }
+
+            MonitorBeginListener(ref listenerSpan, span, registration);
+
+            Awaitable inner;
+            try
+            {
+                inner = invoke();
+            }
+            catch (Exception exception)
+            {
+                Resolve(DispatchOutcome.Faulted, exception);
+                return source.Awaitable;
+            }
+
+            Pump();
+            return source.Awaitable;
+
+            async void Pump()
+            {
+                try
+                {
+                    await inner;
+                    Resolve(DispatchOutcome.Completed, null);
+                }
+                catch (OperationCanceledException)
+                {
+                    Resolve(DispatchOutcome.Cancelled, null);
+                }
+                catch (Exception exception)
+                {
+                    Resolve(DispatchOutcome.Faulted, exception);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Bridges a durative command/request handler's <see cref="Awaitable{TResult}"/> into one the bus controls (see
+        /// <see cref="BridgeAwaitable(Func{Awaitable}, HandlerRegistration, CancellationToken, DispatchSpan)"/>), carrying the handler's result.
+        /// </summary>
+        private Awaitable<TResult> BridgeAwaitable<TResult>(Func<Awaitable<TResult>> invoke, HandlerRegistration registration, CancellationToken cancellation, DispatchSpan span)
+        {
+            AwaitableCompletionSource<TResult> source = new AwaitableCompletionSource<TResult>();
+            bool resolved = false;
+            Action cancel = null;
+            CancellationTokenRegistration tokenRegistration = default;
+            ListenerSpan listenerSpan = null;
+
+            // Every terminal path funnels through here (see the void overload) so the source and the monitor spans settle once.
+            void Resolve(DispatchOutcome outcome, Exception exception, TResult result)
+            {
+                if (resolved)
+                    return;
+                resolved = true;
+
+                if (outcome == DispatchOutcome.Cancelled)
+                    source.TrySetCanceled();
+                else if (outcome == DispatchOutcome.Faulted)
+                    source.TrySetException(exception);
+                else
+                    source.TrySetResult(result);
+
+                MonitorEndListener(listenerSpan, outcome, exception);
+                MonitorCompleteDispatch(span, outcome);
+
+                registration.PendingCancellations?.Remove(cancel);
+                tokenRegistration.Dispose();
+            }
+
+            cancel = () => Resolve(DispatchOutcome.Cancelled, null, default);
+            (registration.PendingCancellations ??= new List<Action>()).Add(cancel);
+            tokenRegistration = cancellation.CanBeCanceled ? cancellation.Register(cancel) : default;
+
+            if (resolved)
+            {
+                tokenRegistration.Dispose();
+                return source.Awaitable;
+            }
+
+            MonitorBeginListener(ref listenerSpan, span, registration);
+
+            Awaitable<TResult> inner;
+            try
+            {
+                inner = invoke();
+            }
+            catch (Exception exception)
+            {
+                Resolve(DispatchOutcome.Faulted, exception, default);
+                return source.Awaitable;
+            }
+
+            Pump();
+            return source.Awaitable;
+
+            async void Pump()
+            {
+                try
+                {
+                    TResult result = await inner;
+                    Resolve(DispatchOutcome.Completed, null, result);
+                }
+                catch (OperationCanceledException)
+                {
+                    Resolve(DispatchOutcome.Cancelled, null, default);
+                }
+                catch (Exception exception)
+                {
+                    Resolve(DispatchOutcome.Faulted, exception, default);
+                }
+            }
+        }
+
+        /// <summary>An already-completed void awaitable (a sync handler run through an async verb, or a silent unhandled void order).</summary>
+        private static Awaitable CompletedAwaitable()
+        {
+            AwaitableCompletionSource source = new AwaitableCompletionSource();
+            source.SetResult();
+            return source.Awaitable;
+        }
+
+        /// <summary>An already-faulted void awaitable, carrying <paramref name="exception"/> to the awaiter.</summary>
+        private static Awaitable FaultedAwaitable(Exception exception)
+        {
+            AwaitableCompletionSource source = new AwaitableCompletionSource();
+            source.SetException(exception);
+            return source.Awaitable;
+        }
+
+        /// <summary>An already-cancelled void awaitable (the caller's token was already cancelled at call time).</summary>
+        private static Awaitable CanceledAwaitable()
+        {
+            AwaitableCompletionSource source = new AwaitableCompletionSource();
+            source.SetCanceled();
+            return source.Awaitable;
+        }
+
+        /// <summary>An already-completed awaitable carrying <paramref name="value"/> (a sync handler run through an async verb).</summary>
+        private static Awaitable<TResult> CompletedAwaitable<TResult>(TResult value)
+        {
+            AwaitableCompletionSource<TResult> source = new AwaitableCompletionSource<TResult>();
+            source.SetResult(value);
+            return source.Awaitable;
+        }
+
+        /// <summary>An already-faulted awaitable, carrying <paramref name="exception"/> to the awaiter (thrown handler, or none registered).</summary>
+        private static Awaitable<TResult> FaultedAwaitable<TResult>(Exception exception)
+        {
+            AwaitableCompletionSource<TResult> source = new AwaitableCompletionSource<TResult>();
+            source.SetException(exception);
+            return source.Awaitable;
+        }
+
+        /// <summary>An already-cancelled awaitable (the caller's token was already cancelled at call time).</summary>
+        private static Awaitable<TResult> CanceledAwaitable<TResult>()
+        {
+            AwaitableCompletionSource<TResult> source = new AwaitableCompletionSource<TResult>();
+            source.SetCanceled();
+            return source.Awaitable;
+        }
+
+        #endregion
+
+    }
+
+}

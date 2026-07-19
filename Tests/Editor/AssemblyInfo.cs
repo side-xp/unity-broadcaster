@@ -1,0 +1,1 @@
+[assembly: NUnit.Framework.Category("SideXP.Broadcaster")]
