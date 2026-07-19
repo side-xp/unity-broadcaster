@@ -36,6 +36,10 @@ namespace SideXP.Broadcaster.EditorOnly
         [SerializeField]
         private bool _showHidden = false;
 
+        // How the tree orders siblings; persisted so the mode you pick survives reloads.
+        [SerializeField]
+        private EventSortMode _sortMode = EventSortMode.Name;
+
         // Width of the tree pane; the details pane fills the rest. Persisted so the split you set survives reloads.
         [SerializeField]
         private float _treeWidth = 280f;
@@ -59,6 +63,13 @@ namespace SideXP.Broadcaster.EditorOnly
         // Snapshot of the last filter pass, for the tree pane's empty-state message.
         private int _visibleCount;
         private bool _onlyHiddenMatch;
+
+        // Labels for the sort dropdown, in EventSortMode order.
+        private static readonly GUIContent[] s_sortModeLabels =
+        {
+            new GUIContent("Sort by name", "Sort events alphabetically."),
+            new GUIContent("Sort by kind", "Sort by event kind first, then alphabetically."),
+        };
 
         #endregion
 
@@ -141,6 +152,7 @@ namespace SideXP.Broadcaster.EditorOnly
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
                 string search = EditorGUILayout.TextField(_search, EditorStyles.toolbarSearchField, MoreGUI.WidthXLOpt);
+                EventSortMode sortMode = (EventSortMode)EditorGUILayout.Popup((int)_sortMode, s_sortModeLabels, EditorStyles.toolbarPopup, GUILayout.Width(110));
 
                 GUILayout.FlexibleSpace();
 
@@ -152,10 +164,11 @@ namespace SideXP.Broadcaster.EditorOnly
 
                 bool showHidden = GUILayout.Toggle(_showHidden, ShowHiddenContent(_showHidden), EditorStyles.toolbarButton, MoreGUI.WidthXSOpt);
 
-                if (search != _search || showHidden != _showHidden)
+                if (search != _search || showHidden != _showHidden || sortMode != _sortMode)
                 {
                     _search = search;
                     _showHidden = showHidden;
+                    _sortMode = sortMode;
                     RebuildTree();
                 }
             }
@@ -402,6 +415,7 @@ namespace SideXP.Broadcaster.EditorOnly
             _visibleCount = filtered.Count;
             _onlyHiddenMatch = !_showHidden && _visibleCount == 0 && EventCatalog.Filter(_catalog, _search, includeHidden: true).Count > 0;
 
+            _tree.SortMode = _sortMode;
             _tree.SetEntries(filtered);
             _tree.Reload();
         }

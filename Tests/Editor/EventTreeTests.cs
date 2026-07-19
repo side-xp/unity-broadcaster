@@ -18,7 +18,13 @@ namespace SideXP.Broadcaster.Tests
         // A catalog entry with the given display name; the event type is irrelevant to nesting, so any concrete event serves.
         private static EventEntry Named(string displayName)
         {
-            return new EventEntry(typeof(PingSignal), EventKind.Signal, null, displayName, null, false, false);
+            return Named(displayName, EventKind.Signal);
+        }
+
+        // A catalog entry with the given display name and kind, for the kind-sort tests (the type slot is irrelevant to ordering).
+        private static EventEntry Named(string displayName, EventKind kind)
+        {
+            return new EventEntry(typeof(PingSignal), kind, null, displayName, null, false, false);
         }
 
         [Test]
@@ -86,6 +92,54 @@ namespace SideXP.Broadcaster.Tests
             EventTreeNode combat = root.Children.Single();
             Assert.AreEqual("Combat", combat.Name);
             Assert.AreEqual("Hit", combat.Children.Single().Name);
+        }
+
+        [Test]
+        public void Build_KindMode_OrdersLeavesByKindThenName()
+        {
+            EventTreeNode root = EventTree.Build(
+                new[]
+                {
+                    Named("Zebra", EventKind.Signal),
+                    Named("Apple", EventKind.Command),
+                    Named("Mango", EventKind.Signal),
+                },
+                EventSortMode.Kind);
+
+            // Signals (kind 0) before the command (kind 2); alphabetical within a kind.
+            Assert.AreEqual(new List<string> { "Mango", "Zebra", "Apple" }, root.Children.Select(n => n.Name).ToList());
+        }
+
+        [Test]
+        public void Build_KindMode_KeepsFoldersFirst()
+        {
+            EventTreeNode root = EventTree.Build(
+                new[]
+                {
+                    Named("Ping", EventKind.Signal),
+                    Named("Group/Child", EventKind.Request),
+                },
+                EventSortMode.Kind);
+
+            // The folder leads regardless of the kind of the event beside it.
+            Assert.AreEqual("Group", root.Children[0].Name);
+            Assert.IsTrue(root.Children[0].HasChildren);
+            Assert.AreEqual("Ping", root.Children[1].Name);
+        }
+
+        [Test]
+        public void Build_NameMode_IgnoresKind()
+        {
+            EventTreeNode root = EventTree.Build(
+                new[]
+                {
+                    Named("Zebra", EventKind.Signal),
+                    Named("Apple", EventKind.Command),
+                },
+                EventSortMode.Name);
+
+            // Name mode is purely alphabetical, so the command's "Apple" leads despite its later kind.
+            Assert.AreEqual(new List<string> { "Apple", "Zebra" }, root.Children.Select(n => n.Name).ToList());
         }
 
     }

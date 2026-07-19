@@ -32,6 +32,9 @@ namespace SideXP.Broadcaster.EditorOnly
         /// <summary>The live registration tally, read to draw the per-row badge in play mode. Left null to omit it.</summary>
         public EventBusLiveIndex Live { get; set; }
 
+        /// <summary>How sibling nodes are ordered; applied on the next <see cref="TreeView{T}.Reload"/>.</summary>
+        public EventSortMode SortMode { get; set; } = EventSortMode.Name;
+
         /// <inheritdoc cref="EventTreeView"/>
         public EventTreeView(TreeViewState<int> state) : base(state)
         {
@@ -66,7 +69,7 @@ namespace SideXP.Broadcaster.EditorOnly
         {
             _nodesById.Clear();
 
-            EventTreeNode model = EventTree.Build(_entries);
+            EventTreeNode model = EventTree.Build(_entries, SortMode);
             TreeViewItem<int> root = new TreeViewItem<int> { id = 0, depth = -1, displayName = "Root" };
 
             int nextId = 1;

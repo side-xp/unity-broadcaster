@@ -16,7 +16,7 @@ namespace SideXP.Broadcaster.EditorOnly
         /// Alpha applied by <see cref="Background(EventKind)"/> for a faint kind tint: low enough that a tree's alternating light/dark row
         /// banding still shows through when the tint is drawn over it.
         /// </summary>
-        public const float BackgroundAlpha = 0.08f;
+        public const float BackgroundAlpha = 0.06f;
 
         /// <summary>Accent for signals (past, "it happened").</summary>
         public static Color Signal => Pick(new Color(0.40f, 0.65f, 0.95f), new Color(0.20f, 0.45f, 0.85f)); // blue
