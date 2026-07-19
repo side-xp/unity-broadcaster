@@ -69,6 +69,22 @@ namespace SideXP.Broadcaster.Tests
             Assert.IsTrue(entry.Hidden);
         }
 
+        [Test]
+        public void Classify_ReadsCustomName()
+        {
+            Assert.IsTrue(EventCatalog.TryClassify(typeof(NamedSignal), out EventEntry entry));
+            Assert.AreEqual("Combat/Damage/Dealt", entry.DisplayName);
+            // The C# type name is still available and unchanged by the custom display name.
+            Assert.AreEqual(nameof(NamedSignal), entry.Name);
+        }
+
+        [Test]
+        public void Classify_WithoutCustomName_DisplayNameFallsBackToTypeName()
+        {
+            Assert.IsTrue(EventCatalog.TryClassify(typeof(PingSignal), out EventEntry entry));
+            Assert.AreEqual(nameof(PingSignal), entry.DisplayName);
+        }
+
         // EmptySignal is only left un-hidden (a valid "no metadata" fixture) in a demos-enabled project; without SIDEXP_DEMOS it's marked
         // hidden so package consumers don't see it, and this assertion wouldn't hold. See EventsWindowTestEvents.
 #if SIDEXP_DEMOS

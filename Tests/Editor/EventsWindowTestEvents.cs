@@ -24,6 +24,13 @@ namespace SideXP.Broadcaster.Tests
 #endif
     internal struct EmptySignal : ISignal { }
 
+    /// <summary>A signal with a custom, <c>/</c>-separated display name, to prove the catalog surfaces <c>[Event(Name = ...)]</c>.</summary>
+    [Event(Name = "Combat/Damage/Dealt", Hidden = true)]
+    internal struct NamedSignal : ISignal
+    {
+        public int Amount;
+    }
+
     /// <summary>A command class with no public parameterless constructor, so a draft can't instantiate it.</summary>
     [Event(Hidden = true)]
     internal class NoDefaultCtorCommand : ICommand

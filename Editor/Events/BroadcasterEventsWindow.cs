@@ -178,7 +178,7 @@ namespace SideXP.Broadcaster.EditorOnly
             Rect foldoutRect = new Rect(rowRect.x, rowRect.y, rowRect.width - LiveColumnsWidth, rowRect.height);
             Rect liveRect = new Rect(foldoutRect.xMax, rowRect.y, LiveColumnsWidth, rowRect.height);
 
-            GUIContent label = new GUIContent(entry.Name, entry.Description);
+            GUIContent label = new GUIContent(entry.DisplayName, entry.Description);
             bool now = EditorGUI.Foldout(foldoutRect, expanded, label, true);
             if (now != expanded)
             {
@@ -232,7 +232,7 @@ namespace SideXP.Broadcaster.EditorOnly
 
                 if (!row.Draft.CanInstantiate)
                 {
-                    EditorGUILayout.HelpBox($"'{entry.Name}' has no public parameterless constructor, so it can't be drafted here.", MessageType.Warning);
+                    EditorGUILayout.HelpBox($"'{entry.DisplayName}' has no public parameterless constructor, so it can't be drafted here.", MessageType.Warning);
                     return;
                 }
 

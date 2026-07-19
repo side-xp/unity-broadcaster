@@ -72,7 +72,7 @@ namespace SideXP.Broadcaster.EditorOnly
                 return false;
 
             EventAttribute attribute = type.GetCustomAttribute<EventAttribute>(inherit: false);
-            entry = new EventEntry(type, kind, resultType, attribute?.Description, attribute != null && attribute.OmitSnapshot, attribute != null && attribute.Hidden);
+            entry = new EventEntry(type, kind, resultType, attribute?.Name, attribute?.Description, attribute != null && attribute.OmitSnapshot, attribute != null && attribute.Hidden);
             return true;
         }
 
@@ -171,6 +171,7 @@ namespace SideXP.Broadcaster.EditorOnly
         private static bool Matches(EventEntry entry, string search)
         {
             return Contains(entry.Name, search)
+                || Contains(entry.DisplayName, search)
                 || Contains(entry.Namespace, search)
                 || Contains(entry.Description, search);
         }

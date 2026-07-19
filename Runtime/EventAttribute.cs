@@ -11,6 +11,11 @@ namespace SideXP.Broadcaster
     {
 
         /// <summary>
+        /// The name the Events window shows for this event instead of the C# type name. Supports <c>/</c>-separated paths.
+        /// </summary>
+        public string Name { get; set; }
+
+        /// <summary>
         /// Human-readable description of the event, surfaced in the Events window and the monitor.
         /// </summary>
         public string Description { get; set; }
