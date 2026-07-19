@@ -1,4 +1,7 @@
 #pragma warning disable IDE1006 // Naming Styles, disabled for demo
+using System;
+using System.Collections;
+
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -30,6 +33,8 @@ namespace SideXP.Broadcaster.Scavengers
             Broadcaster.Subscribe<FoodChanged>(this, OnFoodChanged, init: true);
             Broadcaster.Subscribe<LevelStarted>(this, OnLevelStarted);
             Broadcaster.Subscribe<RunEnded>(this, OnRunEnded);
+            // Perform the level intro: the game waits on this, so the UI owns how long the card stays up
+            Broadcaster.Perform<LevelIntro>(this, PerformLevelIntro);
         }
 
         private void OnDisable()
@@ -50,20 +55,29 @@ namespace SideXP.Broadcaster.Scavengers
         {
             levelText.text = "Day " + signal.level;
             levelImage.SetActive(true);
-            Invoke(nameof(HideLevelImage), levelStartDelay);
         }
 
         private void OnRunEnded(RunEnded signal)
         {
-            // The run is over: keep the overlay up, so cancel any pending hide from the level card.
-            CancelInvoke(nameof(HideLevelImage));
+            // The run is over: raise the overlay and keep it up (no intro performer is running to hide it).
             levelText.text = "After " + signal.level + " days, you starved.";
             levelImage.SetActive(true);
         }
 
-        private void HideLevelImage()
+        /// <summary>
+        /// Performs the <see cref="LevelIntro"/> cue: holds the level card up for its duration, then hides it. Setup waits for this
+        /// to finish, so this component alone decides how long the intro lasts.
+        /// </summary>
+        private void PerformLevelIntro(LevelIntro cue, Action done)
         {
+            StartCoroutine(LevelIntroRoutine(done));
+        }
+
+        private IEnumerator LevelIntroRoutine(Action done)
+        {
+            yield return new WaitForSeconds(levelStartDelay);
             levelImage.SetActive(false);
+            done();
         }
     }
 }

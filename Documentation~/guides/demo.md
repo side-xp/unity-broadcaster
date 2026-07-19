@@ -227,7 +227,7 @@ private void OnFoodChanged(FoodChanged signal)
 }
 ```
 
-> **A note on timing.** `GameManager` keeps its own short setup delay as a *gameplay* gate (enemies mustn't move while the level card is up), and the `GameHUD` separately owns how long the card actually stays on screen. That's two timers describing one beat, a smell we leave in place on purpose. The cue section resolves it: the game will *wait for* the UI's intro to finish rather than run a parallel stopwatch.
+> **A note on timing.** `GameManager` keeps its own short setup delay as a *gameplay* gate (enemies mustn't move while the level card is up), and the `GameHUD` separately owns how long the card actually stays on screen. That's two timers describing one beat, a smell we leave in place on purpose. [The cue section resolves it](#a-second-beat-the-level-intro): the game will *wait for* the UI's intro to finish rather than run a parallel stopwatch.
 
 ### Fan-out
 
@@ -536,6 +536,27 @@ public class ScreenShake : MonoBehaviour
 ```
 
 The game now **waits for the shake**, because it's a performer like any other. Delete the component and the turn speeds back up. That gesture (adding and removing feedback that the game's pacing respects, with zero gameplay edits) is the whole thesis of Broadcaster in one move, and it only lands because of the steps before it.
+
+### A second beat: the level intro
+
+The enemy turn isn't the only place the game guessed a duration. The "Day N" level card did too, and it hid a duplication the [UI section](#signals---feeding-the-ui) deliberately left in place: **two timers for one beat.** `GameManager` ran an `Invoke(EndSetup, levelStartDelay)` to gate setup, while the HUD ran its *own* `Invoke(HideLevelImage, levelStartDelay)` to hide the card. Two independent stopwatches that had to be kept in agreement.
+
+A cue collapses them. The HUD **performs** `LevelIntro`, so it alone owns how long the card stays up, and `GameManager` **awaits** it instead of running a stopwatch of its own:
+
+```csharp
+// GameHUD — the intro's duration lives here, and only here (a coroutine, like the enemy performer)
+private IEnumerator LevelIntroRoutine(Action done)
+{
+    yield return new WaitForSeconds(levelStartDelay);
+    levelImage.SetActive(false);
+    done(); // setup's Cue await unblocks here
+}
+
+// GameManager.InitGame — no parallel delay; it waits for the UI's actual intro
+await Broadcaster.Cue(new LevelIntro());
+```
+
+It's the same tool as the enemy turn (a single-performer beat instead of a crowd) but it's the payoff the UI section promised: one duration, owned by the UI, and gameplay that waits for the real thing rather than a number it hoped would match.
 
 ### The trade-off, named
 

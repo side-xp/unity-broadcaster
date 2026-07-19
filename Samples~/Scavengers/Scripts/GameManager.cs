@@ -22,9 +22,6 @@ namespace SideXP.Broadcaster.Scavengers
 
         [Header("Sequence")]
 
-        [Tooltip("The time (in seconds) before starting a level.")]
-        public float levelStartDelay = 2f;
-
         [Tooltip("The delay (in seconds) between each player turn.")]
         public float turnDelay = 0.1f;
 
@@ -97,28 +94,32 @@ namespace SideXP.Broadcaster.Scavengers
         /// <summary>
         /// Initializes the game on each level.
         /// </summary>
-        private void InitGame()
+        private async void InitGame()
         {
-            // Mark setup, cleared in EndSetup()
+            // Enemies stay put while the intro plays; cleared once the intro cue actually finishes (below)
             doingSetup = true;
 
             // Establish this level's starting state
             SetPlayersTurn(true);
             Broadcaster.Emit(new FoodChanged { current = playerFoodPoints, source = FoodChangeSource.Move });
 
-            // Announce the new level; the UI owns the level card and how long it stays up
+            // Announce the new level; the UI shows the level card
             Broadcaster.Emit(new LevelStarted { level = level });
-            Invoke(nameof(EndSetup), levelStartDelay);
 
             // Reset board
             boardScript.SetupScene(level);
-        }
 
-        /// <summary>
-        /// Clears the setup gate once <see cref="levelStartDelay"/> has elapsed, so enemies may start moving.
-        /// </summary>
-        private void EndSetup()
-        {
+            // Wait for the UI's intro to actually finish, rather than run a parallel stopwatch of our own
+            try
+            {
+                await Broadcaster.Cue(new LevelIntro(), destroyCancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // Play mode exited, or this manager was destroyed during the intro
+                return;
+            }
+
             doingSetup = false;
         }
 

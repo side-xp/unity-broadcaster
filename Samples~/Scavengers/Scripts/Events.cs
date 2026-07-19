@@ -147,5 +147,11 @@ namespace SideXP.Broadcaster.Scavengers
     /// </summary>
     [Event("The enemies' turn: every enemy performs, and the game waits for all of them to finish.")]
     public struct EnemyTurn : ICue { }
+
+    /// <summary>
+    /// The level's opening beat. The UI performs the level card for its own duration, and setup waits for it to finish.
+    /// </summary>
+    [Event("The level intro: the UI shows the level card, and the game waits for it before play begins.")]
+    public struct LevelIntro : ICue { }
 }
 #pragma warning restore IDE1006 // Naming Styles
