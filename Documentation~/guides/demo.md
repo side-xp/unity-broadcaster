@@ -237,7 +237,7 @@ With this in place, `PlayerAte` now has one listener (the sound from the previou
 
 There's a rough edge on purpose. `FoodChanged` only fires on a *change*, so a HUD that comes up at the start of a level has nothing to show until the player's first move — the initial food total has nowhere to come from. `Player.Start` used to set that text directly; now it can't, and emitting a fake "change" of zero to seed it would be dishonest.
 
-That gap is the hook into the next real problem. The food total isn't an event: it's **state**, something a newly-spawned listener should be able to *ask for*, not wait to be told about. That's what providers are for, and it's where we go next.
+That gap is the hook into the next real problem. The food total isn't an event: it's **state**, something a newly-spawned listener should be able to *ask for*, not wait to be told about. That's what [providers](#providers---owning-shared-state) are for, and it's where we go next.
 
 ## Commands - Giving the verbs
 
@@ -336,3 +336,113 @@ public class TrapTile : MonoBehaviour
 ```
 
 There's no `Player` to find, no API to learn, no reference to wire. The command *is* the interface, and it's the narrow, safe one the developer chose to expose.
+
+## Providers - Owning shared state
+
+A **provider** answers one question: *what is the current value of this piece of state?* Where a signal announces a change and a command performs a verb, a provider exposes **state**: readable by anyone, writable by no one but its owner. A reader pulls the current value and holds no reference to whoever owns it, so it can read without gaining the power to corrupt.
+
+### The problem
+
+Three cross-system reads, each done today by reaching for a concrete object.
+
+**Food has two owners.** It lives in `Player` during a level and in `GameManager` between levels, kept in sync by lifecycle timing:
+
+```csharp
+// Original Player
+private void Start()     => food = GameManager.instance.playerFoodPoints; // read forward
+private void OnDisable() => GameManager.instance.playerFoodPoints = food;  // write back
+```
+
+One value, two homes, synchronised by the hope that `OnDisable` runs before the scene reloads.
+
+> This is the same seam the UI section deliberately left broken: a freshly spawned HUD had no value to show.
+
+**Turn state is a public mutable bool, polled every frame.** `Player.Update` reads `GameManager.instance.playersTurn`, and because it can read it, it can write it, and does:
+
+```csharp
+// Original Player
+if (!GameManager.instance.playersTurn) return;  // polled in Update
+GameManager.instance.playersTurn = false;       // …and written in AttemptMove
+```
+
+Reading state you don't own shouldn't hand you the power to corrupt it.
+
+**The player is found by tag.** `Enemy` caches a hard reference located by magic string:
+
+```csharp
+// Original Enemy.Start
+target = GameObject.FindGameObjectWithTag("Player").transform;
+```
+
+### Broadcaster's solution
+
+Give each piece of state a single **owner** that provides it. Readers pull; they can't mutate, and they hold no reference. The pattern is uniform:
+
+> The owner **`Provide`s** the current value (and **`Emit`s** the type when it changes). A reader either **`Subscribe`s with `init: true`** (current value now, plus every change after) or calls **`TryGetCurrent`** for a one-shot read.
+
+The provider is a `Func<T>` invoked lazily, so the value is never stale, and it's released with its owner.
+
+### The implementation
+
+**Food: `GameManager` owns it.** The value has to outlive the level, and the `Player` doesn't, so the persistent manager is the honest owner. `Player` stops holding food entirely. It *orders* the change, and `GameManager` applies it, announces it, and detects starvation:
+
+```csharp
+// Player (no food field anymore)
+Broadcaster.Order(new AdjustFood { delta = -1, source = FoodChangeSource.Move });
+
+// GameManager (the single owner)
+Broadcaster.Provide<FoodChanged>(this, () => new FoodChanged { current = playerFoodPoints, source = FoodChangeSource.Move });
+```
+
+And the HUD finally gets its seed (the value the UI section left blank on purpose) by subscribing with `init: true`:
+
+```csharp
+// GameHUD
+Broadcaster.Subscribe<FoodChanged>(this, OnFoodChanged, init: true);
+```
+
+On every level start the HUD pulls the current food from the provider, so it shows the right number immediately, including the carried-over total on level 2 and beyond.
+
+**Turn state: `GameManager` provides, `Player` subscribes.** The poll becomes a push, and the write disappears:
+
+```csharp
+// GameManager
+Broadcaster.Provide<PlayerTurn>(this, () => new PlayerTurn { active = playersTurn });
+// Player (cache the pushed value instead of polling every frame)
+Broadcaster.Subscribe<PlayerTurn>(this, OnPlayerTurn, init: true);
+```
+
+`Player` can no longer *write* the flag, that was the point. To end its turn it orders a command, and `GameManager`, the owner, flips the state and emits the new value:
+
+```csharp
+// Player, done acting
+Broadcaster.Order(new EndPlayerTurn());
+```
+
+**Player position: `Player` provides, `Enemy` asks.** The enemy stops caching a `Transform` and pulls the current position each turn:
+
+```csharp
+// Player
+Broadcaster.Provide<PlayerPosition>(this, () => new PlayerPosition { position = transform.position });
+
+// Enemy.MoveEnemy
+if (!Broadcaster.TryGetCurrent(out PlayerPosition player))
+    return; // the player is gone; skip the turn
+// …path toward player.position
+```
+
+That single change deletes `FindGameObjectWithTag` and the last thing the sample read from a **tag**.
+
+### Why providers, and not requests
+
+There's a fourth event kind we haven't used: the **request** (`IRequest<T>`). "Where is the player?" *sounds* like a question, so why is it a provider?
+
+Because every cross-system read in this game is *"what is the current value of some state?"* — and that's exactly what a provider is for. A request is for a **computed, parameterized** answer: `IsWalkable { Vector2Int position }`, `PathTo { Vector2Int goal }` — a question that takes arguments and recomputes each time it's asked. Scavengers has none. Even walkability is a physics linecast that `MovingObject` runs on itself; no other system ever asks it.
+
+So the demo covers three kinds honestly instead of manufacturing a fourth just to exercise the API. If your game *does* have a genuine query — "is this tile walkable?", "what's the shortest path?" — that's what `Answer`/`Ask` are for: the same single-handler contract as a command, but side-effect free, because asking a question must never change the answer.
+
+### The payoff
+
+- The food counter is correct on every level start seeded by `init: true`, not by a manual hand-off.
+- Turn state is readable everywhere and writable only by its owner: "reading it" no longer means "you can break it."
+- No `FindGameObjectWithTag`, no tags at all, so no hidden project setup
