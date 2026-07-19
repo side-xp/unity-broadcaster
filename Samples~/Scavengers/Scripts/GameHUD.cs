@@ -26,7 +26,8 @@ namespace SideXP.Broadcaster.Scavengers
 
         private void OnEnable()
         {
-            Broadcaster.Subscribe<FoodChanged>(this, OnFoodChanged);
+            // init: true pulls the current food from its provider right away, so the counter shows a value on level start
+            Broadcaster.Subscribe<FoodChanged>(this, OnFoodChanged, init: true);
             Broadcaster.Subscribe<LevelStarted>(this, OnLevelStarted);
             Broadcaster.Subscribe<RunEnded>(this, OnRunEnded);
         }

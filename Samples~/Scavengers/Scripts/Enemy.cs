@@ -12,7 +12,6 @@ namespace SideXP.Broadcaster.Scavengers
         public int playerDamage;
 
         private Animator animator;
-        private Transform target;
         /// <summary>Defines if the enemy should skip this turn.</summary>
         private bool skipMove;
 
@@ -23,7 +22,6 @@ namespace SideXP.Broadcaster.Scavengers
             GameManager.instance.AddEnemyToList(this);
 
             animator = GetComponent<Animator>();
-            target = GameObject.FindGameObjectWithTag("Player").transform;
 
             base.Start();
         }
@@ -48,17 +46,21 @@ namespace SideXP.Broadcaster.Scavengers
         /// </summary>
         public void MoveEnemy()
         {
+            // Ask for the player's current position instead of holding a reference to it; skip the turn if it's gone
+            if (!Broadcaster.TryGetCurrent(out PlayerPosition player))
+                return;
+
             int xDir = 0;
             int yDir = 0;
 
             // If this entity and the player are on the same column
-            if (Mathf.Abs(target.position.x - transform.position.x) < float.Epsilon)
+            if (Mathf.Abs(player.Position.x - transform.position.x) < float.Epsilon)
                 // Make this entity move vertically
-                yDir = target.position.y > transform.position.y ? 1 : -1;
+                yDir = player.Position.y > transform.position.y ? 1 : -1;
             // Otherwise
             else
                 // Make this entity move horizontally
-                xDir = target.position.x > transform.position.x ? 1 : -1;
+                xDir = player.Position.x > transform.position.x ? 1 : -1;
 
             // Try to move in the computed direction
             AttemptMove<Player>(xDir, yDir);

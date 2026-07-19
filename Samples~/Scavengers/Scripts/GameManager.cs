@@ -29,8 +29,8 @@ namespace SideXP.Broadcaster.Scavengers
         [Tooltip("The delay (in seconds) between each player turn.")]
         public float turnDelay = 0.1f;
 
-        /// <summary>Flag enabled if it's currently the player's turn.</summary>
-        [HideInInspector] public bool playersTurn = true;
+        /// <summary>Flag enabled if it's currently the player's turn. Owned here and exposed as provided <see cref="PlayerTurn"/> state.</summary>
+        private bool playersTurn = true;
 
         private BoardManager boardScript;
         private List<Enemy> enemies;
@@ -64,6 +64,12 @@ namespace SideXP.Broadcaster.Scavengers
 
             // Become the single authority that ends the run. Anything can end it by ordering EndRun, without a reference here.
             Broadcaster.Obey<EndRun>(this, OnEndRun);
+
+            // Own the food total and the turn flag as state: accept the orders that change them, and provide their current value
+            Broadcaster.Obey<AdjustFood>(this, OnAdjustFood);
+            Broadcaster.Obey<EndPlayerTurn>(this, OnEndPlayerTurn);
+            Broadcaster.Provide<FoodChanged>(this, () => new FoodChanged { Current = playerFoodPoints, Source = FoodChangeSource.Move });
+            Broadcaster.Provide<PlayerTurn>(this, () => new PlayerTurn { Active = playersTurn });
         }
 
         private void Update()
@@ -134,6 +140,38 @@ namespace SideXP.Broadcaster.Scavengers
         }
 
         /// <summary>
+        /// Handles the <see cref="AdjustFood"/> command: applies the change, announces it, and ends the run on starvation.
+        /// </summary>
+        private void OnAdjustFood(AdjustFood command)
+        {
+            playerFoodPoints += command.Delta;
+            Broadcaster.Emit(new FoodChanged { Current = playerFoodPoints, Delta = command.Delta, Source = command.Source });
+
+            if (playerFoodPoints <= 0)
+            {
+                Broadcaster.Emit(new PlayerDied());
+                Broadcaster.Order(new EndRun());
+            }
+        }
+
+        /// <summary>
+        /// Handles the <see cref="EndPlayerTurn"/> command: hands the turn over to the enemies.
+        /// </summary>
+        private void OnEndPlayerTurn(EndPlayerTurn command)
+        {
+            SetPlayersTurn(false);
+        }
+
+        /// <summary>
+        /// Sets the turn flag and announces the new value, so subscribers are pushed the change instead of polling.
+        /// </summary>
+        private void SetPlayersTurn(bool active)
+        {
+            playersTurn = active;
+            Broadcaster.Emit(new PlayerTurn { Active = active });
+        }
+
+        /// <summary>
         /// Coroutine to move enemies in sequence.
         /// </summary>
         private IEnumerator MoveEnemies()
@@ -155,7 +193,7 @@ namespace SideXP.Broadcaster.Scavengers
             }
 
             // Clear sequence
-            playersTurn = true;
+            SetPlayersTurn(true);
             enemiesMoving = false;
         }
     }

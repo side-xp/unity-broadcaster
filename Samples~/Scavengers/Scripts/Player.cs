@@ -24,16 +24,12 @@ namespace SideXP.Broadcaster.Scavengers
         public InputAction moveAction = new InputAction("Move", InputActionType.Value, expectedControlType: "Vector2");
 
         private Animator animator;
-        private int food;
+        /// <summary>Cached turn state, pushed by the GameManager instead of polled every frame.</summary>
+        private bool myTurn;
 
         protected override void Start()
         {
             animator = GetComponent<Animator>();
-
-            food = GameManager.instance.playerFoodPoints;
-            // The HUD only hears about *changes* to the food total, so it has no starting value to show yet.
-            // Seeding it is deliberately deferred to the provider step (2.4); until then the HUD comes up blank.
-
             base.Start();
         }
 
@@ -42,20 +38,22 @@ namespace SideXP.Broadcaster.Scavengers
             moveAction.Enable();
             // Become the single authority on damaging the player: anything can hurt it by ordering DamagePlayer
             Broadcaster.Obey<DamagePlayer>(this, OnDamagePlayer);
+            // Expose the player's position as state anyone can read (the enemies use it to path toward the player)
+            Broadcaster.Provide<PlayerPosition>(this, () => new PlayerPosition { Position = transform.position });
+            // Follow the turn flag by push instead of polling every frame; init pulls its current value right now
+            Broadcaster.Subscribe<PlayerTurn>(this, OnPlayerTurn, init: true);
         }
 
         private void OnDisable()
         {
             moveAction.Disable();
             Broadcaster.UnregisterAll(this);
-            // Store current amount of food on the GameManager so it can be re-loaded in next level
-            GameManager.instance.playerFoodPoints = food;
         }
 
         private void Update()
         {
             // Cancel if it's not the player's turn
-            if (!GameManager.instance.playersTurn)
+            if (!myTurn)
                 return;
 
             Vector2 direction = moveAction.ReadValue<Vector2>();
@@ -78,9 +76,8 @@ namespace SideXP.Broadcaster.Scavengers
         /// <inheritdoc cref="MovingObject.AttemptMove{T}(int, int)"/>
         protected override void AttemptMove<T>(int xDir, int yDir)
         {
-            // Decrease food for each move, and announce the change so the HUD can update
-            food--;
-            Broadcaster.Emit(new FoodChanged { Current = food, Delta = -1, Source = FoodChangeSource.Move });
+            // Spend a food point on the move; the food owner applies it and detects starvation
+            Broadcaster.Order(new AdjustFood { Delta = -1, Source = FoodChangeSource.Move });
 
             base.AttemptMove<T>(xDir, yDir);
 
@@ -89,11 +86,8 @@ namespace SideXP.Broadcaster.Scavengers
             if (Move(xDir, yDir, out hit))
                 Broadcaster.Emit(new PlayerMoved());
 
-            // Check for game over if the player lost its last food point this turn
-            CheckIfGameOver();
-
-            // End player turn
-            GameManager.instance.playersTurn = false;
+            // Hand the turn over to the enemies
+            Broadcaster.Order(new EndPlayerTurn());
         }
 
         /// <inheritdoc cref="MovingObject.OnCantMove{T}(T)"/>
@@ -115,8 +109,8 @@ namespace SideXP.Broadcaster.Scavengers
             // Else, if the hit object is a collectible, get its defined amount of food
             else if (other.TryGetComponent(out Collectible collectible))
             {
-                food += collectible.points;
-                Broadcaster.Emit(new FoodChanged { Current = food, Delta = collectible.points, Source = FoodChangeSource.Pickup });
+                // The food owner applies the gain; the audio signals below stay separate feedback
+                Broadcaster.Order(new AdjustFood { Delta = collectible.points, Source = FoodChangeSource.Pickup });
 
                 // Emit what happened; the audio system decides how each kind of pickup sounds
                 if (collectible.kind == CollectibleKind.Food)
@@ -138,26 +132,21 @@ namespace SideXP.Broadcaster.Scavengers
         }
 
         /// <summary>
-        /// Handles the <see cref="DamagePlayer"/> command: reduces the player's food and reacts to it.
+        /// Handles the <see cref="DamagePlayer"/> command: plays the hit reaction and orders the food loss.
         /// </summary>
         private void OnDamagePlayer(DamagePlayer command)
         {
             animator.SetTrigger("hit");
-            food -= command.Amount;
-            Broadcaster.Emit(new FoodChanged { Current = food, Delta = -command.Amount, Source = FoodChangeSource.Damage });
-            CheckIfGameOver();
+            // The food owner applies the loss and decides whether it was fatal
+            Broadcaster.Order(new AdjustFood { Delta = -command.Amount, Source = FoodChangeSource.Damage });
         }
 
         /// <summary>
-        /// Checks if the player has remaining food points. If not, ends the run.
+        /// Caches the turn state pushed by the <see cref="GameManager"/>.
         /// </summary>
-        private void CheckIfGameOver()
+        private void OnPlayerTurn(PlayerTurn signal)
         {
-            if (food <= 0)
-            {
-                Broadcaster.Emit(new PlayerDied());
-                Broadcaster.Order(new EndRun());
-            }
+            myTurn = signal.Active;
         }
     }
 }

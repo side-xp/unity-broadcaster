@@ -1,3 +1,5 @@
+using UnityEngine;
+
 namespace SideXP.Broadcaster.Scavengers
 {
     /// <summary>
@@ -99,5 +101,43 @@ namespace SideXP.Broadcaster.Scavengers
     {
         /// <summary>How much food the damage costs the player.</summary>
         public int Amount;
+    }
+
+    /// <summary>
+    /// Changes the player's food total. Handled by whoever owns the food (the <see cref="GameManager"/>).
+    /// </summary>
+    [Event("Change the player's food by Delta, tagged with why (Source).")]
+    public struct AdjustFood : ICommand
+    {
+        /// <summary>The signed amount to change the food total by.</summary>
+        public int Delta;
+        /// <summary>What caused the change.</summary>
+        public FoodChangeSource Source;
+    }
+
+    /// <summary>
+    /// Ends the player's turn. Handled by the <see cref="GameManager"/>, which then runs the enemy turn.
+    /// </summary>
+    [Event("End the player's turn.")]
+    public struct EndPlayerTurn : ICommand { }
+
+    /// <summary>
+    /// Whether it is currently the player's turn. State provided by the <see cref="GameManager"/> (and emitted when it flips).
+    /// </summary>
+    [Event("Whether it is currently the player's turn.")]
+    public struct PlayerTurn : ISignal
+    {
+        /// <summary>True while the player may act.</summary>
+        public bool Active;
+    }
+
+    /// <summary>
+    /// The player's current world position. State provided by the <see cref="Player"/> so others can read it without holding a reference.
+    /// </summary>
+    [Event("The player's current world position.")]
+    public struct PlayerPosition : ISignal
+    {
+        /// <summary>The player's position right now.</summary>
+        public Vector3 Position;
     }
 }
