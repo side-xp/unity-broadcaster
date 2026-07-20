@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 
 using UnityEditor;
 using UnityEngine;
@@ -528,14 +529,138 @@ namespace SideXP.Broadcaster.EditorOnly
                     : $"running · began frame {span.BeginFrame}";
                 EditorGUILayout.LabelField(timing, EditorStyles.miniLabel);
 
-                // The payload snapshot in a bordered block, monospaced so field values line up.
+                // The payload snapshot in a bordered block, monospaced, with JSON values pretty-printed when they parse.
                 EditorGUILayout.Space(4);
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-                    EditorGUILayout.LabelField(span.Payload != null ? span.Payload.ToString() : "No payload.", PayloadStyle);
+                DrawPayload(span.Payload);
 
                 DrawListenerRows(span);
                 DrawEmitterStack(span);
             }
+        }
+
+        // Renders the captured payload: its custom ToString summary if it has one, otherwise its captured fields one per line. Each value
+        // is pretty-printed when it's well-formed JSON, and shown as-is otherwise.
+        private static void DrawPayload(PayloadSnapshot payload)
+        {
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                if (payload == null)
+                {
+                    GUILayout.Label("No payload.", EditorStyles.miniLabel);
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(payload.Summary))
+                {
+                    GUILayout.Label(PrettyJsonOrRaw(payload.Summary), PayloadStyle);
+                    return;
+                }
+
+                if (payload.Fields.Count == 0)
+                {
+                    GUILayout.Label(payload.TypeName, PayloadStyle);
+                    return;
+                }
+
+                foreach (PayloadField field in payload.Fields)
+                    GUILayout.Label($"{field.Name} = {PrettyJsonOrRaw(field.Value)}", PayloadStyle);
+            }
+        }
+
+        private static string PrettyJsonOrRaw(string text) => TryPrettyJson(text) ?? text;
+
+        // A best-effort JSON pretty-printer. It re-indents a value that reads as a JSON object or array (balanced braces/brackets, closed
+        // strings) and returns null for anything else, so a non-JSON value silently falls back to its raw text. It re-formats rather than
+        // fully validates: it won't reject every malformed document, but it never throws and never garbles a value it can't format.
+        private static string TryPrettyJson(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return null;
+
+            string trimmed = text.Trim();
+            if (trimmed.Length < 2 || (trimmed[0] != '{' && trimmed[0] != '['))
+                return null;
+
+            StringBuilder sb = new StringBuilder(trimmed.Length + 32);
+            int indent = 0;
+            bool inString = false;
+
+            for (int i = 0; i < trimmed.Length; i++)
+            {
+                char c = trimmed[i];
+
+                if (inString)
+                {
+                    sb.Append(c);
+                    if (c == '\\' && i + 1 < trimmed.Length)
+                        sb.Append(trimmed[++i]); // keep an escaped character (incl. an escaped quote) verbatim
+                    else if (c == '"')
+                        inString = false;
+                    continue;
+                }
+
+                switch (c)
+                {
+                    case '"':
+                        inString = true;
+                        sb.Append(c);
+                        break;
+                    case '{':
+                    case '[':
+                        sb.Append(c);
+                        int peek = SkipWhitespace(trimmed, i + 1);
+                        if (peek < trimmed.Length && (trimmed[peek] == '}' || trimmed[peek] == ']'))
+                        {
+                            sb.Append(trimmed[peek]); // keep an empty container ({} or []) on one line
+                            i = peek;
+                        }
+                        else
+                        {
+                            indent++;
+                            AppendIndent(sb, indent);
+                        }
+                        break;
+                    case '}':
+                    case ']':
+                        indent--;
+                        if (indent < 0)
+                            return null; // more closers than openers — not valid JSON
+                        AppendIndent(sb, indent);
+                        sb.Append(c);
+                        break;
+                    case ',':
+                        sb.Append(c);
+                        AppendIndent(sb, indent);
+                        break;
+                    case ':':
+                        sb.Append(": ");
+                        break;
+                    case ' ':
+                    case '\t':
+                    case '\n':
+                    case '\r':
+                        break; // collapse existing whitespace outside strings; the indentation is rebuilt
+                    default:
+                        sb.Append(c);
+                        break;
+                }
+            }
+
+            return inString || indent != 0 ? null : sb.ToString();
+        }
+
+        private static int SkipWhitespace(string s, int i)
+        {
+            while (i < s.Length && char.IsWhiteSpace(s[i]))
+                i++;
+            return i;
+        }
+
+        private static void AppendIndent(StringBuilder sb, int indent)
+        {
+            sb.Append('\n');
+            for (int i = 0; i < indent; i++)
+                sb.Append("  ");
         }
 
         private void DrawListenerRows(DispatchSpan span)
