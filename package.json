@@ -1,6 +1,6 @@
 {
   "name": "com.side-xp.broadcaster",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Code-first, type-keyed event bus for decoupled communication in Unity games and packages.",
   "displayName": "SideXP - Broadcaster",
   "unity": "6000.0",
