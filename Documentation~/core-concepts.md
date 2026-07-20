@@ -120,8 +120,3 @@ Because every meaningful action flows through internal monitor hooks, Broadcaste
 - **Timeline**: a recorder that renders every dispatch as a span across frames. Shows instant dispatches as points, durative ones as blocks, each with its receiver sub-spans, cascade edges, and any violations shown in place. Filter by kind, type, owner, or payload field, and click to ping owners.
 
 The hooks compile only in the editor and development builds and are stripped from release, so there is no runtime cost in a shipped game. See the [Editor Windows](guides/editor-windows.md) guide for how to use them.
-
-## Where to go next
-
-- [Event Kinds](guides/event-kinds.md): the API for each kind, with the rules to follow.
-- [Broadcaster Demo](guides/demo.md): the concepts applied end-to-end in a small game.
