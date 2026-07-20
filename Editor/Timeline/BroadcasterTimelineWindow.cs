@@ -47,6 +47,10 @@ namespace SideXP.Broadcaster.EditorOnly
 
         private static readonly GUIContent s_capLabel = new GUIContent("Cap", "Maximum number of recorded dispatches kept in memory. The oldest are dropped once this many are exceeded.");
         private static readonly GUIContent s_framesLabel = new GUIContent("Frames", "Keep only dispatches from the last N frames (0 = unlimited), so a long session's timeline doesn't compress endlessly.");
+        private static readonly GUIContent s_captureStacksLabel = new GUIContent(
+            "Include call stacks",
+            "Capture the C# call stack it in the Emitter section of a selected span." +
+            "\nNote that capturing a stack per dispatch is costly, and it only affects dispatches recorded while it's on.");
 
         // Persisted so the setup survives domain reloads. The recorder and filter are runtime objects rebuilt on enable from these.
         [SerializeField] private int _capacity = SpanRecorder.DefaultCapacity;
@@ -241,7 +245,7 @@ namespace SideXP.Broadcaster.EditorOnly
 
                 GUILayout.FlexibleSpace();
 
-                bool captureStacks = GUILayout.Toggle(_captureStacks, new GUIContent("Stacks", "Capture the emitter's call stack for each dispatch."), EditorStyles.toolbarButton, GUILayout.Width(52));
+                bool captureStacks = GUILayout.Toggle(_captureStacks, s_captureStacksLabel, EditorStyles.toolbarButton);
                 if (captureStacks != _captureStacks)
                 {
                     _captureStacks = captureStacks;
@@ -532,6 +536,11 @@ namespace SideXP.Broadcaster.EditorOnly
             if (e.type != EventType.MouseDown || e.button != 0 || !viewRect.Contains(e.mousePosition))
                 return;
 
+            // The selection is about to change (or clear), so release any focused text editor — chiefly the call-stack field — so it reloads
+            // the newly selected span's text next repaint instead of keeping the previous one cached (which also mis-sized its box).
+            GUIUtility.keyboardControl = 0;
+            EditorGUIUtility.editingTextField = false;
+
             // Top-most lane wins when bars overlap in screen space: iterate back-to-front.
             for (int i = _layouts.Count - 1; i >= 0; i--)
             {
@@ -593,11 +602,13 @@ namespace SideXP.Broadcaster.EditorOnly
                 // The real (fully-qualified) type under the title, in italic.
                 EditorGUILayout.LabelField(span.EventType.FullName, ItalicTypeStyle);
 
-                // How the dispatch resolved, under the type.
-                string timing = span.IsComplete
-                    ? $"{OutcomeName(span.Outcome)} · frames {span.BeginFrame}–{span.EndFrame} · {DurationMs(span.BeginTime, span.EndTime):0.###} ms"
-                    : $"running · began frame {span.BeginFrame}";
-                EditorGUILayout.LabelField(timing, EditorStyles.miniLabel);
+                // How the dispatch resolved, as a small table. The times are the timeline's own metric (seconds since startup), shown next
+                // to the frames so a span can be pinned to a moment; Duration is the elapsed time.
+                DrawTimingTable(
+                    span.IsComplete ? OutcomeName(span.Outcome) : "Running",
+                    span.IsComplete ? $"{span.BeginFrame}–{span.EndFrame}" : $"{span.BeginFrame}–…",
+                    span.IsComplete ? $"{span.BeginTime:0.###}–{span.EndTime:0.###} s" : $"{span.BeginTime:0.###} s",
+                    span.IsComplete ? $"{DurationMs(span.BeginTime, span.EndTime):0.###} ms" : "…");
 
                 // The payload snapshot in a bordered block, monospaced, with JSON values pretty-printed when they parse.
                 EditorGUILayout.Space(4);
@@ -605,6 +616,28 @@ namespace SideXP.Broadcaster.EditorOnly
 
                 DrawListenerRows(span);
                 DrawEmitterStack(span);
+            }
+        }
+
+        private static readonly string[] s_timingHeaders = { "Status", "Span (frames)", "Span (time)", "Duration" };
+        private static readonly float[] s_timingColumnWidths = { 72f, 96f, 128f, 96f };
+
+        // A small two-row table (headers over values) for the dispatch's status, frame range, time range and duration, so the numbers read
+        // clearly under their labels instead of as one run-on line.
+        private static void DrawTimingTable(string status, string frames, string time, string duration)
+        {
+            string[] values = { status, frames, time, duration };
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                for (int i = 0; i < s_timingHeaders.Length; i++)
+                    EditorGUILayout.LabelField(s_timingHeaders[i], EditorStyles.miniBoldLabel, GUILayout.Width(s_timingColumnWidths[i]));
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                for (int i = 0; i < values.Length; i++)
+                    EditorGUILayout.LabelField(values[i], EditorStyles.miniLabel, GUILayout.Width(s_timingColumnWidths[i]));
             }
         }
 
@@ -637,7 +670,10 @@ namespace SideXP.Broadcaster.EditorOnly
             }
         }
 
-        private static string PrettyJsonOrRaw(string text) => TryPrettyJson(text) ?? text;
+        private static string PrettyJsonOrRaw(string text)
+        {
+            return TryPrettyJson(text) ?? text;
+        }
 
         // A best-effort JSON pretty-printer. It re-indents a value that reads as a JSON object or array (balanced braces/brackets, closed
         // strings) and returns null for anything else, so a non-JSON value silently falls back to its raw text. It re-formats rather than
@@ -749,7 +785,7 @@ namespace SideXP.Broadcaster.EditorOnly
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    string status = listener.IsComplete ? OutcomeName(listener.Outcome) : "running";
+                    string status = listener.IsComplete ? OutcomeName(listener.Outcome) : "Running";
                     EditorGUILayout.LabelField($"{RoleName(listener.Role)} · {OwnerName(listener.Owner)} · {status}", EditorStyles.miniLabel);
                     GUILayout.FlexibleSpace();
 
@@ -773,8 +809,24 @@ namespace SideXP.Broadcaster.EditorOnly
                 return;
 
             EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField("Emitter", EditorStyles.boldLabel);
-            EditorGUILayout.SelectableLabel(stack, EditorStyles.miniLabel, GUILayout.Height(EditorGUIUtility.singleLineHeight * 3f));
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Label("Call stack", EditorStyles.boldLabel);
+                GUILayout.FlexibleSpace();
+                if (GUILayout.Button("Copy", EditorStyles.miniButton, GUILayout.Width(46)))
+                    EditorGUIUtility.systemCopyBuffer = stack;
+            }
+
+            // Selectable (so a frame can be picked out and copied), monospaced, in a bordered block like the payload. The box is sized to the
+            // current stack; SelectableLabel is defocused whenever the selection changes (HandleCanvasClick), so it never keeps a previous
+            // span's cached text — which was what left it showing stale text in a mis-sized box.
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                float width = EditorGUIUtility.currentViewWidth - 30f;
+                float height = PayloadStyle.CalcHeight(new GUIContent(stack), width);
+                EditorGUILayout.SelectableLabel(stack, PayloadStyle, GUILayout.Height(height));
+            }
         }
 
         private string FindEmitterStack(DispatchSpan span)
@@ -814,7 +866,10 @@ namespace SideXP.Broadcaster.EditorOnly
             return false;
         }
 
-        private static double DurationMs(double begin, double end) => (end - begin) * 1000d;
+        private static double DurationMs(double begin, double end)
+        {
+            return (end - begin) * 1000d;
+        }
 
         private static void DrawOutline(Rect rect, Color color, float thickness)
         {
@@ -840,11 +895,11 @@ namespace SideXP.Broadcaster.EditorOnly
         {
             switch (role)
             {
-                case RegistrationRole.SignalListener: return "listener";
-                case RegistrationRole.CuePerformer: return "performer";
-                case RegistrationRole.CommandHandler: return "handler";
-                case RegistrationRole.RequestHandler: return "handler";
-                case RegistrationRole.Provider: return "provider";
+                case RegistrationRole.SignalListener: return "Listener";
+                case RegistrationRole.CuePerformer: return "Performer";
+                case RegistrationRole.CommandHandler: return "Handler";
+                case RegistrationRole.RequestHandler: return "Handler";
+                case RegistrationRole.Provider: return "Provider";
                 default: return role.ToString();
             }
         }
@@ -853,9 +908,9 @@ namespace SideXP.Broadcaster.EditorOnly
         {
             switch (outcome)
             {
-                case DispatchOutcome.Completed: return "completed";
-                case DispatchOutcome.Faulted: return "faulted";
-                case DispatchOutcome.Cancelled: return "cancelled";
+                case DispatchOutcome.Completed: return "Completed";
+                case DispatchOutcome.Faulted: return "Faulted";
+                case DispatchOutcome.Cancelled: return "Cancelled";
                 default: return outcome.ToString();
             }
         }
