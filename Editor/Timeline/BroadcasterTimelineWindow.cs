@@ -28,6 +28,10 @@ namespace SideXP.Broadcaster.EditorOnly
 
         /// <summary>The violations strip along the top of the canvas.</summary>
         private const float TopStrip = 14f;
+        /// <summary>The time-ruler strip above the violations strip, holding the graduation labels.</summary>
+        private const float RulerHeight = 16f;
+        /// <summary>Total header height (ruler + violations strip) that the dispatch lanes start below.</summary>
+        private const float HeaderHeight = RulerHeight + TopStrip;
         private const float LaneHeight = 18f;
         private const float LaneGap = 4f;
         private const float SidePad = 6f;
@@ -280,12 +284,15 @@ namespace SideXP.Broadcaster.EditorOnly
             GetTimeBounds(visibleSpans, now, out double t0, out double t1);
 
             BuildLayout(visibleSpans, rect.width - 16f, t0, t1, now, out int laneCount);
-            float contentHeight = TopStrip + laneCount * (LaneHeight + LaneGap) + LaneGap;
+            float contentHeight = HeaderHeight + laneCount * (LaneHeight + LaneGap) + LaneGap;
 
             Rect viewRect = new Rect(0f, 0f, rect.width - 16f, Mathf.Max(contentHeight, rect.height));
             _scroll = GUI.BeginScrollView(rect, _scroll, viewRect);
             {
-                // Cascade edges use Handles, which only render on the repaint pass; drawing them first keeps them under the bars.
+                // Graduations sit behind everything; drawing them first keeps the gridlines under the bars.
+                DrawTimeGraduations(viewRect.width, t0, t1, viewRect.height);
+
+                // Cascade edges use Handles, which only render on the repaint pass; drawing them before the bars keeps them underneath.
                 if (Event.current.type == EventType.Repaint)
                     DrawCascadeEdges();
 
@@ -358,7 +365,7 @@ namespace SideXP.Broadcaster.EditorOnly
                     laneEnds.Add(0f);
                 laneEnds[lane] = x0 + barWidth;
 
-                float y = TopStrip + lane * (LaneHeight + LaneGap) + LaneGap;
+                float y = HeaderHeight + lane * (LaneHeight + LaneGap) + LaneGap;
                 Rect barRect = new Rect(x0, y, barWidth, LaneHeight);
                 _layouts.Add(new SpanLayout { Recorded = recorded, Rect = barRect });
                 _rectsBySpan[span] = barRect;
@@ -449,11 +456,53 @@ namespace SideXP.Broadcaster.EditorOnly
 
                 double when = violation.Span != null ? violation.Span.BeginTime : now;
                 float x = MapX(when, t0, t1, width);
-                Rect marker = new Rect(x - 4f, 2f, 8f, 8f);
+                Rect marker = new Rect(x - 4f, RulerHeight + 2f, 8f, 8f);
                 EditorGUI.DrawRect(marker, ViolationColor);
                 // An (invisible) label over the marker carries the message as a hover tooltip, so a violation is readable in place.
-                GUI.Label(new Rect(x - 6f, 0f, 12f, TopStrip), new GUIContent(string.Empty, violation.Message));
+                GUI.Label(new Rect(x - 6f, RulerHeight, 12f, TopStrip), new GUIContent(string.Empty, violation.Message));
             }
+        }
+
+        // Vertical time graduations behind the bars: faint gridlines at "nice" intervals, each labelled in the top ruler with the elapsed
+        // time from the left edge (the earliest visible dispatch). The X axis is time-based, so these mark time; frame graduations can ride
+        // an optional toggle later.
+        private void DrawTimeGraduations(float width, double t0, double t1, float height)
+        {
+            double range = t1 - t0;
+            double step = NiceTimeStep(range, width, 90f);
+            if (step <= 0.0)
+                return;
+
+            bool milliseconds = range < 1.0;
+            double scale = milliseconds ? 1000.0 : 1.0;
+            string unit = milliseconds ? "ms" : "s";
+
+            for (int k = 0; ; k++)
+            {
+                double elapsed = k * step;
+                double t = t0 + elapsed;
+                if (t > t1 + step * 0.5)
+                    break;
+
+                float x = MapX(t, t0, t1, width);
+                EditorGUI.DrawRect(new Rect(x, RulerHeight, 1f, height - RulerHeight), GraduationLine);
+                GUI.Label(new Rect(x + 2f, 0f, 60f, RulerHeight), $"{elapsed * scale:0.##} {unit}", EditorStyles.miniLabel);
+            }
+        }
+
+        // A "nice" graduation step (1, 2 or 5 times a power of ten) for the given time range and pixel width, aiming for roughly one line
+        // every targetPixels. Zero when there's nothing to space out.
+        private static double NiceTimeStep(double range, float width, float targetPixels)
+        {
+            if (range <= 0.0 || width <= 0f)
+                return 0.0;
+
+            double approxSteps = System.Math.Max(1.0, width / targetPixels);
+            double rawStep = range / approxSteps;
+            double magnitude = System.Math.Pow(10.0, System.Math.Floor(System.Math.Log10(rawStep)));
+            double normalized = rawStep / magnitude;
+            double nice = normalized <= 1.0 ? 1.0 : normalized <= 2.0 ? 2.0 : normalized <= 5.0 ? 5.0 : 10.0;
+            return nice * magnitude;
         }
 
         private void HandleCanvasClick(Rect viewRect)
@@ -803,6 +852,7 @@ namespace SideXP.Broadcaster.EditorOnly
         private static Color DetailBackground => EditorGUIUtility.isProSkin ? new Color(0.22f, 0.22f, 0.22f) : new Color(0.82f, 0.82f, 0.82f);
         private static Color ListenerSegment => EditorGUIUtility.isProSkin ? new Color(0.9f, 0.9f, 0.9f, 0.8f) : new Color(0.15f, 0.15f, 0.15f, 0.8f);
         private static Color CascadeEdge => new Color(1f, 1f, 1f, 0.22f);
+        private static Color GraduationLine => EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, 0.06f) : new Color(0f, 0f, 0f, 0.08f);
         private static Color SelectionOutline => new Color(1f, 1f, 1f, 0.9f);
         private static Color InFlightOutline => new Color(1f, 1f, 1f, 0.35f);
         private static Color ViolationColor => new Color(0.95f, 0.35f, 0.3f);
