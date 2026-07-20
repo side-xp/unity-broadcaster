@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/side-xp/unity-broadcaster/compare/v0.1.0...v0.2.0) (2026-07-20)
+
+
+### Features
+
+* **editor:** add time/frames graduations toggle ([162754b](https://github.com/side-xp/unity-broadcaster/commit/162754b90b5f69ded9fdfef88e2a582c8e227787))
+
+
+### Bug Fixes
+
+* **editor:** fixed call stack info ([001bcaf](https://github.com/side-xp/unity-broadcaster/commit/001bcaf372ee7a9afc289711ae9f6364351d5a4f))
+* **tutorial:** changed layout ([c0e0cac](https://github.com/side-xp/unity-broadcaster/commit/c0e0cac887f8deada708e0a295e03b09ac4b000d))
+
 ## [0.1.0](https://github.com/side-xp/unity-broadcaster/compare/v0.0.0...v0.1.0) (2026-07-20)
 
 
