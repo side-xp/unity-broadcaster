@@ -1,0 +1,647 @@
+using System.Collections.Generic;
+
+using UnityEditor;
+using UnityEngine;
+
+using SideXP.Core.EditorOnly;
+
+namespace SideXP.Broadcaster.EditorOnly
+{
+
+    /// <summary>
+    /// A profiler-style view of the dispatches a bus reported: time runs left to right, each dispatch is a bar (a synchronous one collapses
+    /// to a point, a cue or async order/ask stretches into a block), the callbacks it invoked show as sub-segments, cascades link a parent
+    /// dispatch to the ones it triggered, and violations mark where the bus was misused. Selecting a bar reveals its payload, its callbacks
+    /// and (when captured) the emitter's call stack, with ping/filter shortcuts to the owners involved.<br/>
+    /// It's a thin renderer: retention lives in a <see cref="SpanRecorder"/> and matching in a <see cref="TimelineFilter"/>; this window only
+    /// lays them out.
+    /// </summary>
+    public class BroadcasterTimelineWindow : EditorWindow
+    {
+
+        #region Fields
+
+        private const string WindowTitle = "Broadcaster Timeline";
+        private const string MenuItem = EditorConstants.EditorWindowMenu + "/Broadcaster/Timeline";
+
+        /// <summary>The violations strip along the top of the canvas.</summary>
+        private const float TopStrip = 14f;
+        private const float LaneHeight = 18f;
+        private const float LaneGap = 4f;
+        private const float SidePad = 6f;
+        /// <summary>A synchronous dispatch has ~zero duration; drawn at least this wide as a point.</summary>
+        private const float MinBarWidth = 4f;
+        private const float DetailHeight = 190f;
+        private const float MinCanvasHeight = 80f;
+
+        // Persisted so the setup survives domain reloads. The recorder and filter are runtime objects rebuilt on enable from these.
+        [SerializeField] private int _capacity = SpanRecorder.DefaultCapacity;
+        [SerializeField] private bool _recording = true;
+        [SerializeField] private bool _captureStacks = false;
+        [SerializeField] private string _search = string.Empty;
+        [SerializeField] private bool _showSignals = true;
+        [SerializeField] private bool _showCues = true;
+        [SerializeField] private bool _showCommands = true;
+        [SerializeField] private bool _showRequests = true;
+
+        private SpanRecorder _recorder;
+        private TimelineFilter _filter;
+
+        private Vector2 _scroll;
+        private DispatchSpan _selectedSpan;
+        private Vector2 _detailScroll;
+
+        // Rebuilt each repaint from the visible spans, then reused for hit-testing this same frame.
+        private readonly List<SpanLayout> _layouts = new List<SpanLayout>();
+        private readonly Dictionary<DispatchSpan, Rect> _rectsBySpan = new Dictionary<DispatchSpan, Rect>();
+
+        #endregion
+
+
+        #region Lifecycle
+
+        [MenuItem(MenuItem)]
+        public static BroadcasterTimelineWindow Open()
+        {
+            BroadcasterTimelineWindow window = GetWindow<BroadcasterTimelineWindow>(false, WindowTitle, true);
+            window.Show();
+            return window;
+        }
+
+        private void OnEnable()
+        {
+            _recorder = new SpanRecorder
+            {
+                Capacity = Mathf.Max(1, _capacity),
+                IsRecording = _recording,
+                CaptureEmitterStacks = _captureStacks,
+            };
+            _recorder.Changed += Repaint;
+            _recorder.Attach(Broadcaster.Default);
+
+            _filter = new TimelineFilter { TypeQuery = _search };
+            _filter.SetKindEnabled(EventKind.Signal, _showSignals);
+            _filter.SetKindEnabled(EventKind.Cue, _showCues);
+            _filter.SetKindEnabled(EventKind.Command, _showCommands);
+            _filter.SetKindEnabled(EventKind.Request, _showRequests);
+            _filter.Changed += Repaint;
+
+            EditorApplication.playModeStateChanged += HandlePlayModeStateChange;
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.playModeStateChanged -= HandlePlayModeStateChange;
+
+            if (_recorder != null)
+            {
+                _recorder.Changed -= Repaint;
+                _recorder.Detach();
+                _recorder = null;
+            }
+        }
+
+        // The default bus is recreated across play-mode transitions, so re-point the recorder at whatever the current default bus is. Retained
+        // spans are kept (the recorder only clears on an explicit Clear), so a session's timeline doesn't vanish on stop.
+        private void HandlePlayModeStateChange(PlayModeStateChange change)
+        {
+            if (change == PlayModeStateChange.EnteredPlayMode || change == PlayModeStateChange.EnteredEditMode)
+            {
+                _recorder.Attach(Broadcaster.Default);
+                Repaint();
+            }
+        }
+
+        #endregion
+
+
+        #region Layout
+
+        private void OnGUI()
+        {
+            float toolbarHeight = Mathf.Max(EditorStyles.toolbar.fixedHeight, 18f);
+            using (new GUILayout.AreaScope(new Rect(0f, 0f, position.width, toolbarHeight)))
+                DrawToolbar();
+
+            bool hasSelection = _selectedSpan != null;
+            float detailHeight = hasSelection ? Mathf.Min(DetailHeight, position.height - toolbarHeight - MinCanvasHeight) : 0f;
+            detailHeight = Mathf.Max(0f, detailHeight);
+
+            Rect canvasRect = new Rect(0f, toolbarHeight, position.width, position.height - toolbarHeight - detailHeight);
+            DrawCanvas(canvasRect);
+
+            if (hasSelection && detailHeight > 0f)
+                DrawDetailPane(new Rect(0f, canvasRect.yMax, position.width, detailHeight));
+        }
+
+        private void DrawToolbar()
+        {
+            using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
+            {
+                bool recording = GUILayout.Toggle(_recording, _recording ? "Recording" : "Paused", EditorStyles.toolbarButton, GUILayout.Width(76));
+                if (recording != _recording)
+                {
+                    _recording = recording;
+                    _recorder.IsRecording = recording;
+                }
+
+                if (GUILayout.Button("Clear", EditorStyles.toolbarButton, GUILayout.Width(46)))
+                {
+                    _recorder.Clear();
+                    _selectedSpan = null;
+                }
+
+                GUILayout.Space(8);
+                DrawKindToggle(EventKind.Signal, ref _showSignals);
+                DrawKindToggle(EventKind.Cue, ref _showCues);
+                DrawKindToggle(EventKind.Command, ref _showCommands);
+                DrawKindToggle(EventKind.Request, ref _showRequests);
+
+                GUILayout.Space(8);
+                string search = EditorGUILayout.TextField(_search, EditorStyles.toolbarSearchField, GUILayout.Width(160));
+                if (search != _search)
+                {
+                    _search = search;
+                    _filter.TypeQuery = search;
+                }
+
+                if (_filter.Owner != null)
+                {
+                    if (GUILayout.Button($"Owner: {OwnerName(_filter.Owner)}  ✕", EditorStyles.toolbarButton))
+                        _filter.Owner = null;
+                }
+
+                GUILayout.FlexibleSpace();
+
+                bool captureStacks = GUILayout.Toggle(_captureStacks, new GUIContent("Stacks", "Capture the emitter's call stack for each dispatch."), EditorStyles.toolbarButton, GUILayout.Width(52));
+                if (captureStacks != _captureStacks)
+                {
+                    _captureStacks = captureStacks;
+                    _recorder.CaptureEmitterStacks = captureStacks;
+                }
+
+                GUILayout.Label("Cap", EditorStyles.miniLabel);
+                int capacity = EditorGUILayout.DelayedIntField(_capacity, GUILayout.Width(54));
+                if (capacity != _capacity)
+                {
+                    _capacity = Mathf.Max(1, capacity);
+                    _recorder.Capacity = _capacity;
+                }
+            }
+        }
+
+        private void DrawKindToggle(EventKind kind, ref bool enabled)
+        {
+            Color previous = GUI.color;
+            if (enabled)
+                GUI.color = EventKindColors.Get(kind);
+            bool next = GUILayout.Toggle(enabled, KindName(kind), EditorStyles.toolbarButton, GUILayout.Width(64));
+            GUI.color = previous;
+
+            if (next != enabled)
+            {
+                enabled = next;
+                _filter.SetKindEnabled(kind, next);
+            }
+        }
+
+        #endregion
+
+
+        #region Canvas
+
+        private void DrawCanvas(Rect rect)
+        {
+            EditorGUI.DrawRect(rect, CanvasBackground);
+
+            List<RecordedSpan> visibleSpans = CollectVisibleSpans();
+            if (visibleSpans.Count == 0)
+            {
+                DrawCanvasInfo(rect);
+                return;
+            }
+
+            double now = Time.realtimeSinceStartupAsDouble;
+            GetTimeBounds(visibleSpans, now, out double t0, out double t1);
+
+            BuildLayout(visibleSpans, rect.width - 16f, t0, t1, now, out int laneCount);
+            float contentHeight = TopStrip + laneCount * (LaneHeight + LaneGap) + LaneGap;
+
+            Rect viewRect = new Rect(0f, 0f, rect.width - 16f, Mathf.Max(contentHeight, rect.height));
+            _scroll = GUI.BeginScrollView(rect, _scroll, viewRect);
+            {
+                // Cascade edges use Handles, which only render on the repaint pass; drawing them first keeps them under the bars.
+                if (Event.current.type == EventType.Repaint)
+                    DrawCascadeEdges();
+
+                DrawSpanBars(now);
+                DrawViolations(viewRect.width, t0, t1, now);
+                HandleCanvasClick(viewRect);
+            }
+            GUI.EndScrollView();
+        }
+
+        private List<RecordedSpan> CollectVisibleSpans()
+        {
+            List<RecordedSpan> visible = new List<RecordedSpan>();
+            bool selectionStillPresent = false;
+            foreach (RecordedSpan recorded in _recorder.Spans)
+            {
+                if (recorded.Span == _selectedSpan)
+                    selectionStillPresent = true;
+                if (_filter.Matches(recorded.Span))
+                    visible.Add(recorded);
+            }
+
+            // Drop a selection whose span the recorder has evicted, so the detail pane doesn't linger on a gone dispatch.
+            if (_selectedSpan != null && !selectionStillPresent)
+                _selectedSpan = null;
+
+            return visible;
+        }
+
+        private static void GetTimeBounds(List<RecordedSpan> spans, double now, out double t0, out double t1)
+        {
+            t0 = double.MaxValue;
+            t1 = double.MinValue;
+            foreach (RecordedSpan recorded in spans)
+            {
+                DispatchSpan span = recorded.Span;
+                double end = span.IsComplete ? span.EndTime : now;
+                if (span.BeginTime < t0) t0 = span.BeginTime;
+                if (end > t1) t1 = end;
+            }
+
+            // A single instant (all-synchronous) session has no width; give it a nominal one so bars still lay out.
+            if (t1 - t0 < 1e-4)
+                t1 = t0 + 1e-4;
+        }
+
+        // Greedy lane packing: each span goes in the first lane whose last bar ends before it starts, so overlapping (concurrent) dispatches
+        // stack onto separate lanes and sequential ones reuse a lane. Fills _layouts and _rectsBySpan for this frame.
+        private void BuildLayout(List<RecordedSpan> spans, float width, double t0, double t1, double now, out int laneCount)
+        {
+            _layouts.Clear();
+            _rectsBySpan.Clear();
+            List<float> laneEnds = new List<float>();
+
+            foreach (RecordedSpan recorded in spans)
+            {
+                DispatchSpan span = recorded.Span;
+                double end = span.IsComplete ? span.EndTime : now;
+                float x0 = MapX(span.BeginTime, t0, t1, width);
+                float x1 = MapX(end, t0, t1, width);
+                float barWidth = Mathf.Max(MinBarWidth, x1 - x0);
+
+                int lane = 0;
+                for (; lane < laneEnds.Count; lane++)
+                {
+                    if (laneEnds[lane] <= x0 - 2f)
+                        break;
+                }
+                if (lane == laneEnds.Count)
+                    laneEnds.Add(0f);
+                laneEnds[lane] = x0 + barWidth;
+
+                float y = TopStrip + lane * (LaneHeight + LaneGap) + LaneGap;
+                Rect barRect = new Rect(x0, y, barWidth, LaneHeight);
+                _layouts.Add(new SpanLayout { Recorded = recorded, Rect = barRect });
+                _rectsBySpan[span] = barRect;
+            }
+
+            laneCount = laneEnds.Count;
+        }
+
+        private void DrawSpanBars(double now)
+        {
+            foreach (SpanLayout layout in _layouts)
+            {
+                DispatchSpan span = layout.Recorded.Span;
+                Rect rect = layout.Rect;
+
+                Color fill = EventKindColors.Get(span.Kind);
+                fill.a = span.IsComplete ? 0.55f : 0.35f; // an in-flight block reads fainter than a finished one
+                EditorGUI.DrawRect(rect, fill);
+
+                DrawListenerSegments(span, rect, now);
+
+                if (!span.IsComplete)
+                    DrawOutline(rect, InFlightOutline, 1f);
+                if (span == _selectedSpan)
+                    DrawOutline(rect, SelectionOutline, 2f);
+                if (SpanFaulted(span))
+                    DrawOutline(rect, ViolationColor, 1f);
+
+                if (rect.width > 42f)
+                {
+                    Rect labelRect = new Rect(rect.x + 4f, rect.y, rect.width - 6f, rect.height);
+                    GUI.Label(labelRect, span.EventType.Name, BarLabelStyle);
+                }
+            }
+        }
+
+        // The callbacks a dispatch invoked, drawn as thin segments along the bottom of its bar, each spanning the time that callback ran (a
+        // synchronous callback is a tick; a durative performer stretches). Faulted ones tint red.
+        private void DrawListenerSegments(DispatchSpan span, Rect barRect, double now)
+        {
+            if (span.Listeners.Count == 0 || barRect.width < MinBarWidth * 2f)
+                return;
+
+            double spanStart = span.BeginTime;
+            double spanEnd = span.IsComplete ? span.EndTime : now;
+            double range = spanEnd - spanStart;
+            if (range <= 0d)
+                return;
+
+            float trackY = barRect.yMax - 4f;
+            foreach (ListenerSpan listener in span.Listeners)
+            {
+                double lStart = listener.BeginTime;
+                double lEnd = listener.IsComplete ? listener.EndTime : now;
+                float lx0 = barRect.x + (float)((lStart - spanStart) / range) * barRect.width;
+                float lx1 = barRect.x + (float)((lEnd - spanStart) / range) * barRect.width;
+                Rect seg = new Rect(lx0, trackY, Mathf.Max(2f, lx1 - lx0), 3f);
+                EditorGUI.DrawRect(seg, listener.Outcome == DispatchOutcome.Faulted ? ViolationColor : ListenerSegment);
+            }
+        }
+
+        // A faint connector from a parent dispatch's bar to each visible child it triggered — the causal cascade (a guaranteed link for
+        // synchronous cascades, temporal containment otherwise).
+        private void DrawCascadeEdges()
+        {
+            Handles.color = CascadeEdge;
+            foreach (SpanLayout layout in _layouts)
+            {
+                DispatchSpan span = layout.Recorded.Span;
+                if (span.Parent == null || !_rectsBySpan.TryGetValue(span.Parent, out Rect parentRect))
+                    continue;
+
+                Rect childRect = layout.Rect;
+                Vector3 from = new Vector3(parentRect.x, parentRect.yMax);
+                Vector3 to = new Vector3(childRect.x, childRect.y);
+                Handles.DrawLine(from, to);
+            }
+        }
+
+        // Violations sit in the top strip at the time they happened (dispatch-time ones under their dispatch; registration-time ones, which
+        // carry no dispatch, at the current edge). Red markers; hovering one shows its message as a tooltip.
+        private void DrawViolations(float width, double t0, double t1, double now)
+        {
+            foreach (Violation violation in _recorder.Violations)
+            {
+                if (!_filter.Matches(violation))
+                    continue;
+
+                double when = violation.Span != null ? violation.Span.BeginTime : now;
+                float x = MapX(when, t0, t1, width);
+                Rect marker = new Rect(x - 4f, 2f, 8f, 8f);
+                EditorGUI.DrawRect(marker, ViolationColor);
+                // An (invisible) label over the marker carries the message as a hover tooltip, so a violation is readable in place.
+                GUI.Label(new Rect(x - 6f, 0f, 12f, TopStrip), new GUIContent(string.Empty, violation.Message));
+            }
+        }
+
+        private void HandleCanvasClick(Rect viewRect)
+        {
+            Event e = Event.current;
+            if (e.type != EventType.MouseDown || e.button != 0 || !viewRect.Contains(e.mousePosition))
+                return;
+
+            // Top-most lane wins when bars overlap in screen space: iterate back-to-front.
+            for (int i = _layouts.Count - 1; i >= 0; i--)
+            {
+                if (_layouts[i].Rect.Contains(e.mousePosition))
+                {
+                    _selectedSpan = _layouts[i].Recorded.Span;
+                    e.Use();
+                    Repaint();
+                    return;
+                }
+            }
+
+            _selectedSpan = null;
+            e.Use();
+            Repaint();
+        }
+
+        private void DrawCanvasInfo(Rect rect)
+        {
+            string message = _recorder.Spans.Count == 0
+                ? (Application.isPlaying ? "Recording. Emit, cue, order or ask on the default bus to see dispatches here." : "No dispatches recorded yet. Fire events from the Events window or enter play mode.")
+                : "No recorded dispatch matches the current filters.";
+            Rect box = new Rect(rect.x + 8f, rect.y + 8f, rect.width - 16f, 40f);
+            EditorGUI.HelpBox(box, message, MessageType.Info);
+        }
+
+        private static float MapX(double t, double t0, double t1, float width)
+        {
+            double n = (t - t0) / (t1 - t0);
+            return SidePad + (float)n * (width - 2f * SidePad);
+        }
+
+        #endregion
+
+
+        #region Detail pane
+
+        private void DrawDetailPane(Rect rect)
+        {
+            EditorGUI.DrawRect(rect, DetailBackground);
+            DispatchSpan span = _selectedSpan;
+            if (span == null)
+                return;
+
+            using (new GUILayout.AreaScope(rect))
+            using (EditorGUILayout.ScrollViewScope scroll = new EditorGUILayout.ScrollViewScope(_detailScroll))
+            {
+                _detailScroll = scroll.scrollPosition;
+                EditorGUILayout.Space(4);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Label(span.EventType.Name, EditorStyles.boldLabel);
+                    GUILayout.FlexibleSpace();
+                    DrawKindTag(span.Kind);
+                }
+
+                EditorGUILayout.LabelField(span.EventType.FullName, EditorStyles.miniLabel);
+                if (span.Payload != null)
+                    EditorGUILayout.LabelField(span.Payload.ToString(), EditorStyles.wordWrappedMiniLabel);
+
+                string timing = span.IsComplete
+                    ? $"{OutcomeName(span.Outcome)} · frames {span.BeginFrame}–{span.EndFrame} · {DurationMs(span.BeginTime, span.EndTime):0.###} ms"
+                    : $"running · began frame {span.BeginFrame}";
+                EditorGUILayout.LabelField(timing, EditorStyles.miniLabel);
+
+                DrawListenerRows(span);
+                DrawEmitterStack(span);
+            }
+        }
+
+        private void DrawListenerRows(DispatchSpan span)
+        {
+            EditorGUILayout.Space(4);
+            EditorGUILayout.LabelField(span.Listeners.Count == 1 ? "1 callback" : $"{span.Listeners.Count} callbacks", EditorStyles.boldLabel);
+            if (span.Listeners.Count == 0)
+            {
+                EditorGUILayout.LabelField("No callback was invoked.", EditorStyles.miniLabel);
+                return;
+            }
+
+            foreach (ListenerSpan listener in span.Listeners)
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    string status = listener.IsComplete ? OutcomeName(listener.Outcome) : "running";
+                    EditorGUILayout.LabelField($"{RoleName(listener.Role)} · {OwnerName(listener.Owner)} · {status}", EditorStyles.miniLabel);
+                    GUILayout.FlexibleSpace();
+
+                    UnityEngine.Object unityOwner = listener.Owner as UnityEngine.Object;
+                    using (new EditorGUI.DisabledScope(unityOwner == null))
+                    {
+                        if (GUILayout.Button("Ping", EditorStyles.miniButton, GUILayout.Width(40)))
+                            EditorGUIUtility.PingObject(unityOwner);
+                    }
+
+                    if (GUILayout.Button("Filter", EditorStyles.miniButton, GUILayout.Width(46)))
+                        _filter.Owner = listener.Owner;
+                }
+            }
+        }
+
+        private void DrawEmitterStack(DispatchSpan span)
+        {
+            string stack = FindEmitterStack(span);
+            if (string.IsNullOrEmpty(stack))
+                return;
+
+            EditorGUILayout.Space(4);
+            EditorGUILayout.LabelField("Emitter", EditorStyles.boldLabel);
+            EditorGUILayout.SelectableLabel(stack, EditorStyles.miniLabel, GUILayout.Height(EditorGUIUtility.singleLineHeight * 3f));
+        }
+
+        private string FindEmitterStack(DispatchSpan span)
+        {
+            foreach (RecordedSpan recorded in _recorder.Spans)
+            {
+                if (recorded.Span == span)
+                    return recorded.EmitterStack;
+            }
+            return null;
+        }
+
+        private static void DrawKindTag(EventKind kind)
+        {
+            Color previous = GUI.color;
+            GUI.color = EventKindColors.Get(kind);
+            GUILayout.Label(KindName(kind), EditorStyles.miniLabel);
+            GUI.color = previous;
+        }
+
+        #endregion
+
+
+        #region Helpers & styles
+
+        private static bool SpanFaulted(DispatchSpan span)
+        {
+            if (span.Outcome == DispatchOutcome.Faulted)
+                return true;
+            foreach (ListenerSpan listener in span.Listeners)
+            {
+                if (listener.Outcome == DispatchOutcome.Faulted)
+                    return true;
+            }
+            return false;
+        }
+
+        private static double DurationMs(double begin, double end) => (end - begin) * 1000d;
+
+        private static void DrawOutline(Rect rect, Color color, float thickness)
+        {
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, thickness), color);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - thickness, rect.width, thickness), color);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, thickness, rect.height), color);
+            EditorGUI.DrawRect(new Rect(rect.xMax - thickness, rect.y, thickness, rect.height), color);
+        }
+
+        private static string KindName(EventKind kind)
+        {
+            switch (kind)
+            {
+                case EventKind.Signal: return "Signal";
+                case EventKind.Cue: return "Cue";
+                case EventKind.Command: return "Command";
+                case EventKind.Request: return "Request";
+                default: return kind.ToString();
+            }
+        }
+
+        private static string RoleName(RegistrationRole role)
+        {
+            switch (role)
+            {
+                case RegistrationRole.SignalListener: return "listener";
+                case RegistrationRole.CuePerformer: return "performer";
+                case RegistrationRole.CommandHandler: return "handler";
+                case RegistrationRole.RequestHandler: return "handler";
+                case RegistrationRole.Provider: return "provider";
+                default: return role.ToString();
+            }
+        }
+
+        private static string OutcomeName(DispatchOutcome outcome)
+        {
+            switch (outcome)
+            {
+                case DispatchOutcome.Completed: return "completed";
+                case DispatchOutcome.Faulted: return "faulted";
+                case DispatchOutcome.Cancelled: return "cancelled";
+                default: return outcome.ToString();
+            }
+        }
+
+        private static string OwnerName(object owner)
+        {
+            if (owner == null)
+                return "none";
+            if (owner is UnityEngine.Object unityObject)
+                return unityObject == null ? "(destroyed)" : unityObject.name;
+            return owner.GetType().Name;
+        }
+
+        private static Color CanvasBackground => EditorGUIUtility.isProSkin ? new Color(0.18f, 0.18f, 0.18f) : new Color(0.76f, 0.76f, 0.76f);
+        private static Color DetailBackground => EditorGUIUtility.isProSkin ? new Color(0.22f, 0.22f, 0.22f) : new Color(0.82f, 0.82f, 0.82f);
+        private static Color ListenerSegment => EditorGUIUtility.isProSkin ? new Color(0.9f, 0.9f, 0.9f, 0.8f) : new Color(0.15f, 0.15f, 0.15f, 0.8f);
+        private static Color CascadeEdge => new Color(1f, 1f, 1f, 0.22f);
+        private static Color SelectionOutline => new Color(1f, 1f, 1f, 0.9f);
+        private static Color InFlightOutline => new Color(1f, 1f, 1f, 0.35f);
+        private static Color ViolationColor => new Color(0.95f, 0.35f, 0.3f);
+
+        private static GUIStyle s_barLabelStyle;
+        private static GUIStyle BarLabelStyle
+        {
+            get
+            {
+                if (s_barLabelStyle == null)
+                    s_barLabelStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip };
+                return s_barLabelStyle;
+            }
+        }
+
+        #endregion
+
+
+        #region Types
+
+        private struct SpanLayout
+        {
+            public RecordedSpan Recorded;
+            public Rect Rect;
+        }
+
+        #endregion
+
+    }
+
+}
