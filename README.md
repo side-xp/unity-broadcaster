@@ -1,11 +1,39 @@
 # SideXP - Broadcaster (Unity)
 
-Asset-based event communication system.
+Code-first, type-keyed, intention-driven event bus for decoupled communication in *Unity* games and packages.
 
-## Features
+Events are very good for decoupling systems. You may be familiar with events (C# `event` keyword or [`UnityEvent`](https://docs.unity3d.com/Documentation/ScriptReference/Events.UnityEvent.html) for example). But at some point in a project, events can feel too limited and messy, making some behaviors blurry especially if you combine code and inspector listeners.
 
-- Assets that represent an event (called *channel*)
-- Also allow using types as channel
+Broadcaster combines 2 approaches to make events usable for any kind of project, whether it's a prototype or a final production:
+
+- **Events are type-keyed**, which means that instead of naming them using arbitrary strings or reaching a variable in a component, you just use their actual C# type, which is both their identity and payload.
+- **Events are intention-driven**, which means that depending on the *nature* of an event (a notification, a question, an order, ...), you will use a specific kind of event but always through the same channel.
+
+```csharp
+using SideXP.Broadcaster;
+
+// Declare an event by just creating a new class or struct
+[Event("The score of the player has just changed.")]
+public struct PlayerScoreChanged : ISignal { public int score; }
+
+// Subscribe/unsubscribe to a typed signal
+void OnEnable()  => Broadcaster.Subscribe<PlayerScoreChanged>(this, signal => scoreUI.text = signal.score.ToString());
+void OnDisable() => Broadcaster.UnregisterAll(this);
+
+// Emit a signal
+Broadcaster.Emit(new PlayerScoreChanged { score = 1200 });
+```
+
+## Why use it
+
+- **Four intentful event kinds**: *Signals* announce, *Commands* instruct, *Requests* ask, *Cues* coordinate timed reactions. The kind you choose is a contract, not just a channel.
+- **Type-safe and code-first**: events are plain types, checked by the compiler. No string keys, no assets to wire up.
+- **Decoupled by construction**: owner-based registration and one-line cleanup (`UnregisterAll(this)`): no dangling subscriptions, no references between systems.
+- **First-class async**! Commands, Requests, and Cues can be awaited, with cancellation, and an in-flight await never hangs even if its handler goes away mid-flight.
+- **Observable out of the box**: an Events catalog and a Timeline recorder window, at zero cost in a shipped build.
+- **Testable in isolation**: a private `EventBus` per test: no scenes, no singletons, no teardown.
+
+![Events catalog and Timeline windows side by side](./Documentation~/Images/editor-windows-profiling.png)
 
 ## Installation
 

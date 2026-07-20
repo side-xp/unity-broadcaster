@@ -11,9 +11,13 @@ You can import it from the *Packages Manager* window:
 
 This will install the sample files into your `Assets` folder.
 
+![Samples tab in Package Manager window](../Images/demo-import_sample.png)
+
 ## The game concept
 
 The game is a turn-based tile-based roguelike where the player must survive incoming zombies.
+
+![Demo gameplay](../Images/demo-gameplay.gif)
 
 In short:
 
@@ -329,6 +333,8 @@ The asymmetry is the point: nobody caring that the player moved is normal, but n
 Two concrete wins, neither hypothetical.
 
 **Test game-over without dying.** Open the **Events** window (`Tools/Sideways Experiments/Broadcaster/Events`) in play mode, find `EndRun`, and fire it. The game-over screen appears, no starving first. Because the whole action is reachable through one type, the tooling can drive it directly, and so anyone in the team can.
+
+![Use the Events window to manually trigger events](../Images/demo-emit_events.gif)
 
 **Author a hazard with zero gameplay knowledge.** A `TrapTile` that ends a turn on the player's food is now a few lines that mention *nothing* about `Player`:
 

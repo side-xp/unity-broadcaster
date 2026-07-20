@@ -3,7 +3,7 @@
 
 [project]
 site_name = "SideXP - Broadcaster (Unity)"
-site_description = "Asset-based event communication system."
+site_description = "Code-first, type-keyed event bus for decoupled communication in Unity games and packages."
 site_author = "Sideways Experiments"
 copyright = """
 &copy; 2026 <a href="https://sideways-experiments.com">Sideways Experiments</a>
