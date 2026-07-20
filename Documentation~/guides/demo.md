@@ -233,9 +233,8 @@ With this in place, `PlayerAte` now has one listener (the sound from the previou
 
 ### Deliberately left unfinished
 
-There's a rough edge on purpose. `FoodChanged` only fires on a *change*, so a HUD that comes up at the start of a level has nothing to show until the player's first move — the initial food total has nowhere to come from. `Player.Start` used to set that text directly; now it can't, and emitting a fake "change" of zero to seed it would be dishonest.
-
-That gap is the hook into the next real problem. The food total isn't an event: it's **state**, something a newly-spawned listener should be able to *ask for*, not wait to be told about. That's what [providers](#providers---owning-shared-state) are for, and it's where we go next.
+> Note that there's a rough edge on purpose. `FoodChanged` only fires on a *change*, so a HUD that comes up at the start of a level has nothing to show until the player's first move. It means that the initial food total has nowhere to come from. `Player.Start()` used to set that text directly, but now it can't, and emitting a fake "change" of zero to seed it would be dishonest.
+> That gap is the hook into the next real problem. The food total isn't an event: it's **state**, something a newly-spawned listener should be able to *ask for*, not wait to be told about. That's what [providers](#providers---owning-shared-state) are for, and it's where we go next.
 
 ## Commands - Giving the verbs
 
