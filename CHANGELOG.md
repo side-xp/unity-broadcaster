@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0](https://github.com/side-xp/unity-broadcaster/compare/v0.2.0...v1.0.0) (2026-07-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* first release!
+
+### Features
+
+* added listener component ([7a6d46a](https://github.com/side-xp/unity-broadcaster/commit/7a6d46a8060ab0e9cedfa692bd96208b766778e2))
+* first release! ([b07a1eb](https://github.com/side-xp/unity-broadcaster/commit/b07a1eb74ed5a86977d9b0b4104a97e447589002))
+
 ## [0.2.0](https://github.com/side-xp/unity-broadcaster/compare/v0.1.0...v0.2.0) (2026-07-20)
 
 
