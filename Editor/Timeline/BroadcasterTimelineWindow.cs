@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
+using SideXP.Core;
 using SideXP.Core.EditorOnly;
 
 namespace SideXP.Broadcaster.EditorOnly
@@ -31,11 +32,18 @@ namespace SideXP.Broadcaster.EditorOnly
         private const float SidePad = 6f;
         /// <summary>A synchronous dispatch has ~zero duration; drawn at least this wide as a point.</summary>
         private const float MinBarWidth = 4f;
+        /// <summary>The detail pane's default height; resizable at runtime via the splitter above it.</summary>
         private const float DetailHeight = 190f;
+        private const float MinDetailHeight = 60f;
         private const float MinCanvasHeight = 80f;
+        private const float SplitterThickness = 4f;
+
+        private static readonly GUIContent s_capLabel = new GUIContent("Cap", "Maximum number of recorded dispatches kept in memory. The oldest are dropped once this many are exceeded.");
+        private static readonly GUIContent s_framesLabel = new GUIContent("Frames", "Keep only dispatches from the last N frames (0 = unlimited), so a long session's timeline doesn't compress endlessly.");
 
         // Persisted so the setup survives domain reloads. The recorder and filter are runtime objects rebuilt on enable from these.
         [SerializeField] private int _capacity = SpanRecorder.DefaultCapacity;
+        [SerializeField] private int _maxFrameSpan = 0;
         [SerializeField] private bool _recording = true;
         [SerializeField] private bool _captureStacks = false;
         [SerializeField] private string _search = string.Empty;
@@ -43,6 +51,7 @@ namespace SideXP.Broadcaster.EditorOnly
         [SerializeField] private bool _showCues = true;
         [SerializeField] private bool _showCommands = true;
         [SerializeField] private bool _showRequests = true;
+        [SerializeField] private float _detailHeight = DetailHeight;
 
         private SpanRecorder _recorder;
         private TimelineFilter _filter;
@@ -50,6 +59,7 @@ namespace SideXP.Broadcaster.EditorOnly
         private Vector2 _scroll;
         private DispatchSpan _selectedSpan;
         private Vector2 _detailScroll;
+        private bool _resizingDetail;
 
         // Rebuilt each repaint from the visible spans, then reused for hit-testing this same frame.
         private readonly List<SpanLayout> _layouts = new List<SpanLayout>();
@@ -73,6 +83,7 @@ namespace SideXP.Broadcaster.EditorOnly
             _recorder = new SpanRecorder
             {
                 Capacity = Mathf.Max(1, _capacity),
+                MaxFrameSpan = Mathf.Max(0, _maxFrameSpan),
                 IsRecording = _recording,
                 CaptureEmitterStacks = _captureStacks,
             };
@@ -124,14 +135,45 @@ namespace SideXP.Broadcaster.EditorOnly
                 DrawToolbar();
 
             bool hasSelection = _selectedSpan != null;
-            float detailHeight = hasSelection ? Mathf.Min(DetailHeight, position.height - toolbarHeight - MinCanvasHeight) : 0f;
-            detailHeight = Mathf.Max(0f, detailHeight);
+            float splitterHeight = hasSelection ? SplitterThickness : 0f;
+            float maxDetail = Mathf.Max(MinDetailHeight, position.height - toolbarHeight - splitterHeight - MinCanvasHeight);
+            float detailHeight = hasSelection ? Mathf.Clamp(_detailHeight, MinDetailHeight, maxDetail) : 0f;
 
-            Rect canvasRect = new Rect(0f, toolbarHeight, position.width, position.height - toolbarHeight - detailHeight);
+            Rect canvasRect = new Rect(0f, toolbarHeight, position.width, position.height - toolbarHeight - splitterHeight - detailHeight);
             DrawCanvas(canvasRect);
 
-            if (hasSelection && detailHeight > 0f)
-                DrawDetailPane(new Rect(0f, canvasRect.yMax, position.width, detailHeight));
+            if (hasSelection)
+            {
+                Rect splitterRect = new Rect(0f, canvasRect.yMax, position.width, splitterHeight);
+                HandleDetailSplitter(splitterRect, maxDetail);
+                DrawDetailPane(new Rect(0f, splitterRect.yMax, position.width, detailHeight));
+            }
+        }
+
+        // The draggable divider above the detail pane; drives _detailHeight (clamped back in OnGUI). Dragging up grows the pane, so a
+        // dispatch with many callbacks is readable without endless scrolling.
+        private void HandleDetailSplitter(Rect rect, float maxDetail)
+        {
+            EditorGUI.DrawRect(new Rect(rect.x, rect.center.y - 0.5f, rect.width, 1f), new Color(0f, 0f, 0f, 0.25f));
+            EditorGUIUtility.AddCursorRect(rect, MouseCursor.ResizeVertical);
+
+            Event e = Event.current;
+            switch (e.type)
+            {
+                case EventType.MouseDown when rect.Contains(e.mousePosition):
+                    _resizingDetail = true;
+                    e.Use();
+                    break;
+                case EventType.MouseDrag when _resizingDetail:
+                    _detailHeight = Mathf.Clamp(_detailHeight - e.delta.y, MinDetailHeight, maxDetail);
+                    e.Use();
+                    Repaint();
+                    break;
+                case EventType.MouseUp when _resizingDetail:
+                    _resizingDetail = false;
+                    e.Use();
+                    break;
+            }
         }
 
         private void DrawToolbar()
@@ -180,12 +222,24 @@ namespace SideXP.Broadcaster.EditorOnly
                     _recorder.CaptureEmitterStacks = captureStacks;
                 }
 
-                GUILayout.Label("Cap", EditorStyles.miniLabel);
-                int capacity = EditorGUILayout.DelayedIntField(_capacity, GUILayout.Width(54));
-                if (capacity != _capacity)
+                using (new LabelWidthScope(MoreGUI.WidthXS))
                 {
-                    _capacity = Mathf.Max(1, capacity);
-                    _recorder.Capacity = _capacity;
+                    int capacity = EditorGUILayout.DelayedIntField(s_capLabel, _capacity);
+                    if (capacity != _capacity)
+                    {
+                        _capacity = Mathf.Max(1, capacity);
+                        _recorder.Capacity = _capacity;
+                    }
+                }
+
+                using (new LabelWidthScope(MoreGUI.WidthS))
+                {
+                    int maxFrameSpan = EditorGUILayout.DelayedIntField(s_framesLabel, _maxFrameSpan);
+                    if (maxFrameSpan != _maxFrameSpan)
+                    {
+                        _maxFrameSpan = Mathf.Max(0, maxFrameSpan);
+                        _recorder.MaxFrameSpan = _maxFrameSpan;
+                    }
                 }
             }
         }
@@ -455,23 +509,29 @@ namespace SideXP.Broadcaster.EditorOnly
             using (EditorGUILayout.ScrollViewScope scroll = new EditorGUILayout.ScrollViewScope(_detailScroll))
             {
                 _detailScroll = scroll.scrollPosition;
-                EditorGUILayout.Space(4);
+                EditorGUILayout.Space(6);
 
+                // Title row: the event name large on the left, the colorized kind tag on the right (mirrors the Events window header).
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    GUILayout.Label(span.EventType.Name, EditorStyles.boldLabel);
+                    GUILayout.Label(span.EventType.Name, EditorStyles.largeLabel);
                     GUILayout.FlexibleSpace();
                     DrawKindTag(span.Kind);
                 }
 
-                EditorGUILayout.LabelField(span.EventType.FullName, EditorStyles.miniLabel);
-                if (span.Payload != null)
-                    EditorGUILayout.LabelField(span.Payload.ToString(), EditorStyles.wordWrappedMiniLabel);
+                // The real (fully-qualified) type under the title, in italic.
+                EditorGUILayout.LabelField(span.EventType.FullName, ItalicTypeStyle);
 
+                // How the dispatch resolved, under the type.
                 string timing = span.IsComplete
                     ? $"{OutcomeName(span.Outcome)} · frames {span.BeginFrame}–{span.EndFrame} · {DurationMs(span.BeginTime, span.EndTime):0.###} ms"
                     : $"running · began frame {span.BeginFrame}";
                 EditorGUILayout.LabelField(timing, EditorStyles.miniLabel);
+
+                // The payload snapshot in a bordered block, monospaced so field values line up.
+                EditorGUILayout.Space(4);
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                    EditorGUILayout.LabelField(span.Payload != null ? span.Payload.ToString() : "No payload.", PayloadStyle);
 
                 DrawListenerRows(span);
                 DrawEmitterStack(span);
@@ -480,6 +540,8 @@ namespace SideXP.Broadcaster.EditorOnly
 
         private void DrawListenerRows(DispatchSpan span)
         {
+            EditorGUILayout.Space(8);
+            MoreEditorGUI.HorizontalSeparator();
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField(span.Listeners.Count == 1 ? "1 callback" : $"{span.Listeners.Count} callbacks", EditorStyles.boldLabel);
             if (span.Listeners.Count == 0)
@@ -530,12 +592,14 @@ namespace SideXP.Broadcaster.EditorOnly
             return null;
         }
 
+        // A right-aligned kind label tinted by the shared kind color, matching the Events window header.
         private static void DrawKindTag(EventKind kind)
         {
-            Color previous = GUI.color;
-            GUI.color = EventKindColors.Get(kind);
-            GUILayout.Label(KindName(kind), EditorStyles.miniLabel);
-            GUI.color = previous;
+            GUIStyle style = KindTagStyle;
+            Color previous = style.normal.textColor;
+            style.normal.textColor = EventKindColors.Get(kind);
+            GUILayout.Label(KindName(kind), style);
+            style.normal.textColor = previous;
         }
 
         #endregion
@@ -617,6 +681,29 @@ namespace SideXP.Broadcaster.EditorOnly
         private static Color SelectionOutline => new Color(1f, 1f, 1f, 0.9f);
         private static Color InFlightOutline => new Color(1f, 1f, 1f, 0.35f);
         private static Color ViolationColor => new Color(0.95f, 0.35f, 0.3f);
+        private static Color SeparatorColor => EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, 0.12f) : new Color(0f, 0f, 0f, 0.18f);
+
+        private static GUIStyle s_kindTagStyle;
+        private static GUIStyle KindTagStyle
+        {
+            get
+            {
+                if (s_kindTagStyle == null)
+                    s_kindTagStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight };
+                return s_kindTagStyle;
+            }
+        }
+
+        private static GUIStyle s_italicTypeStyle;
+        private static GUIStyle ItalicTypeStyle
+        {
+            get
+            {
+                if (s_italicTypeStyle == null)
+                    s_italicTypeStyle = new GUIStyle(EditorStyles.miniLabel) { fontStyle = FontStyle.Italic };
+                return s_italicTypeStyle;
+            }
+        }
 
         private static GUIStyle s_barLabelStyle;
         private static GUIStyle BarLabelStyle
@@ -626,6 +713,41 @@ namespace SideXP.Broadcaster.EditorOnly
                 if (s_barLabelStyle == null)
                     s_barLabelStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip };
                 return s_barLabelStyle;
+            }
+        }
+
+        // The payload's monospaced style: a wrapping mini-label whose font is a monospace one built from whatever the OS provides, so
+        // values line up column-wise. Resolved once; if no monospace font is installed the font stays default (a silent fallback).
+        private static GUIStyle s_payloadStyle;
+        private static GUIStyle PayloadStyle
+        {
+            get
+            {
+                if (s_payloadStyle == null)
+                {
+                    s_payloadStyle = new GUIStyle(EditorStyles.wordWrappedMiniLabel);
+                    if (MonospaceFont != null)
+                        s_payloadStyle.font = MonospaceFont;
+                }
+                return s_payloadStyle;
+            }
+        }
+
+        // A monospace font sourced from the editor's OS, trying a few common families before a generic fallback. Built lazily and cached
+        // (creating a dynamic font isn't free); null only if the OS exposes none of them, in which case the payload keeps the default font.
+        private static bool s_monoFontResolved;
+        private static Font s_monoFont;
+        private static Font MonospaceFont
+        {
+            get
+            {
+                if (!s_monoFontResolved)
+                {
+                    s_monoFont = Font.CreateDynamicFontFromOSFont(
+                        new[] { "Consolas", "Menlo", "Monaco", "DejaVu Sans Mono", "Courier New", "monospace" }, 12);
+                    s_monoFontResolved = true;
+                }
+                return s_monoFont;
             }
         }
 

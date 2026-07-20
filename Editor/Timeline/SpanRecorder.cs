@@ -36,6 +36,7 @@ namespace SideXP.Broadcaster.EditorOnly
 
         private EventBus _bus;
         private int _capacity = DefaultCapacity;
+        private int _maxFrameSpan;
         private bool _isRecording = true;
 
         /// <summary>Raised whenever the retained data changed (a span began or finished, a violation arrived, a trim or a clear), so the window can repaint.</summary>
@@ -76,6 +77,26 @@ namespace SideXP.Broadcaster.EditorOnly
         {
             get => _isRecording;
             set => _isRecording = value;
+        }
+
+        /// <summary>
+        /// How many of the most recent frames to retain: a dispatch or violation older than this many frames behind the newest one is
+        /// dropped, so a long-running session's timeline stops compressing endlessly. Zero (the default) keeps everything, bounded only by
+        /// <see cref="Capacity"/>. Clamped to at least zero; lowering it drops the now-expired entries immediately.
+        /// </summary>
+        public int MaxFrameSpan
+        {
+            get => _maxFrameSpan;
+            set
+            {
+                int clamped = value < 0 ? 0 : value;
+                if (clamped == _maxFrameSpan)
+                    return;
+
+                _maxFrameSpan = clamped;
+                if (TryGetNewestFrame(out int reference) && TrimToFrameWindow(reference))
+                    Changed?.Invoke();
+            }
         }
 
         /// <summary>
@@ -169,6 +190,7 @@ namespace SideXP.Broadcaster.EditorOnly
 
             _spans.Add(new RecordedSpan(span, CaptureEmitterStacks ? CaptureStack() : null));
             TrimToCapacity();
+            TrimToFrameWindow(span.BeginFrame);
             Changed?.Invoke();
         }
 
@@ -185,6 +207,7 @@ namespace SideXP.Broadcaster.EditorOnly
 
             _violations.Add(violation);
             TrimToCapacity();
+            TrimToFrameWindow(violation.Frame);
             Changed?.Invoke();
         }
 
@@ -204,6 +227,67 @@ namespace SideXP.Broadcaster.EditorOnly
                 trimmed = true;
             }
             return trimmed;
+        }
+
+        // Drops the leading (oldest) spans and violations that fall outside the frame window ending at referenceFrame. Both stores are
+        // oldest-first with non-decreasing frames (spans in begin order, violations in arrival order), so the expired ones are always a
+        // prefix. A window of zero is unbounded and trims nothing.
+        private bool TrimToFrameWindow(int referenceFrame)
+        {
+            if (_maxFrameSpan <= 0)
+                return false;
+
+            bool trimmed = false;
+
+            int spansToDrop = 0;
+            while (spansToDrop < _spans.Count && IsExpiredByFrame(_spans[spansToDrop].Span.BeginFrame, referenceFrame, _maxFrameSpan))
+                spansToDrop++;
+            if (spansToDrop > 0)
+            {
+                _spans.RemoveRange(0, spansToDrop);
+                trimmed = true;
+            }
+
+            int violationsToDrop = 0;
+            while (violationsToDrop < _violations.Count && IsExpiredByFrame(_violations[violationsToDrop].Frame, referenceFrame, _maxFrameSpan))
+                violationsToDrop++;
+            if (violationsToDrop > 0)
+            {
+                _violations.RemoveRange(0, violationsToDrop);
+                trimmed = true;
+            }
+
+            return trimmed;
+        }
+
+        // The newest frame currently retained, used as the window's right edge when the window size changes (a live capture uses the
+        // incoming dispatch's frame instead). False when nothing is retained.
+        private bool TryGetNewestFrame(out int frame)
+        {
+            frame = 0;
+            bool any = false;
+            if (_spans.Count > 0)
+            {
+                frame = _spans[_spans.Count - 1].Span.BeginFrame;
+                any = true;
+            }
+            if (_violations.Count > 0)
+            {
+                int violationFrame = _violations[_violations.Count - 1].Frame;
+                frame = any ? System.Math.Max(frame, violationFrame) : violationFrame;
+                any = true;
+            }
+            return any;
+        }
+
+        /// <summary>
+        /// Whether an entry on <paramref name="frame"/> falls outside a window of <paramref name="maxFrameSpan"/> frames ending at
+        /// <paramref name="referenceFrame"/> (the newest activity). A window of zero is unbounded, so nothing is ever expired; the window
+        /// is inclusive of the reference frame, so the last <paramref name="maxFrameSpan"/> frames are kept.
+        /// </summary>
+        internal static bool IsExpiredByFrame(int frame, int referenceFrame, int maxFrameSpan)
+        {
+            return maxFrameSpan > 0 && frame <= referenceFrame - maxFrameSpan;
         }
 
         // Captures the managed call stack at emit time, dropping the leading frames that are inside Broadcaster itself so attribution starts
@@ -244,8 +328,8 @@ namespace SideXP.Broadcaster.EditorOnly
     }
 
     /// <summary>
-    /// One retained dispatch: the monitor's <see cref="DispatchSpan"/> plus the recorder-side extras it doesn't carry — currently the
-    /// emitter's captured call stack, present only when stack capture was on when the span began.
+    /// One retained dispatch: the monitor's <see cref="DispatchSpan"/> plus the recorder-side extras it doesn't carry (currently the
+    /// emitter's captured call stack), present only when stack capture was on when the span began.
     /// </summary>
     /// <remarks>
     /// Holds the live span instance (a reference, stable), so reading <see cref="Span"/> always reflects its latest state, completion

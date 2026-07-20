@@ -240,6 +240,24 @@ namespace SideXP.Broadcaster.Tests
         }
 
         [Test]
+        public void MaxFrameSpan_IsClampedToAtLeastZero()
+        {
+            SpanRecorder recorder = new SpanRecorder { MaxFrameSpan = -5 };
+            Assert.AreEqual(0, recorder.MaxFrameSpan);
+        }
+
+        [Test]
+        public void FrameWindow_ExpiryBoundary()
+        {
+            Assert.IsFalse(SpanRecorder.IsExpiredByFrame(0, 100, 0), "A window of zero is unbounded — nothing expires.");
+            Assert.IsFalse(SpanRecorder.IsExpiredByFrame(100, 100, 10), "The newest frame is always kept.");
+            Assert.IsFalse(SpanRecorder.IsExpiredByFrame(91, 100, 10), "The oldest frame inside a 10-frame window is kept.");
+            Assert.IsTrue(SpanRecorder.IsExpiredByFrame(90, 100, 10), "The frame just outside the window is dropped.");
+            Assert.IsFalse(SpanRecorder.IsExpiredByFrame(100, 100, 1), "A one-frame window keeps the current frame.");
+            Assert.IsTrue(SpanRecorder.IsExpiredByFrame(99, 100, 1), "A one-frame window drops the previous frame.");
+        }
+
+        [Test]
         public void Changed_RaisedWhenASpanIsRecorded()
         {
             EventBus bus = new EventBus();
