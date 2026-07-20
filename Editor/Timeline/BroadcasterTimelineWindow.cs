@@ -42,6 +42,8 @@ namespace SideXP.Broadcaster.EditorOnly
         private const float MinDetailHeight = 60f;
         private const float MinCanvasHeight = 80f;
         private const float SplitterThickness = 4f;
+        /// <summary>How often (seconds) the window repaints itself while playing, so in-flight blocks and the moving time edge animate even when the window isn't focused. Deliberately coarser than the game's frame rate.</summary>
+        private const double LiveRefreshInterval = 0.1;
 
         private static readonly GUIContent s_capLabel = new GUIContent("Cap", "Maximum number of recorded dispatches kept in memory. The oldest are dropped once this many are exceeded.");
         private static readonly GUIContent s_framesLabel = new GUIContent("Frames", "Keep only dispatches from the last N frames (0 = unlimited), so a long session's timeline doesn't compress endlessly.");
@@ -65,6 +67,7 @@ namespace SideXP.Broadcaster.EditorOnly
         private DispatchSpan _selectedSpan;
         private Vector2 _detailScroll;
         private bool _resizingDetail;
+        private double _lastLiveRepaint;
 
         // Rebuilt each repaint from the visible spans, then reused for hit-testing this same frame.
         private readonly List<SpanLayout> _layouts = new List<SpanLayout>();
@@ -103,11 +106,13 @@ namespace SideXP.Broadcaster.EditorOnly
             _filter.Changed += Repaint;
 
             EditorApplication.playModeStateChanged += HandlePlayModeStateChange;
+            EditorApplication.update += HandleEditorUpdate;
         }
 
         private void OnDisable()
         {
             EditorApplication.playModeStateChanged -= HandlePlayModeStateChange;
+            EditorApplication.update -= HandleEditorUpdate;
 
             if (_recorder != null)
             {
@@ -126,6 +131,22 @@ namespace SideXP.Broadcaster.EditorOnly
                 _recorder.Attach(Broadcaster.Default);
                 Repaint();
             }
+        }
+
+        // Ticks in the background (unlike the focus-gated GUI loop), so while playing and recording we self-repaint on a coarse cadence to
+        // animate in-flight blocks and the advancing time edge without the window needing focus. Outside those cases the GUI repaints only
+        // on data changes and user input, as before.
+        private void HandleEditorUpdate()
+        {
+            if (!Application.isPlaying || !_recording)
+                return;
+
+            double now = EditorApplication.timeSinceStartup;
+            if (now - _lastLiveRepaint < LiveRefreshInterval)
+                return;
+
+            _lastLiveRepaint = now;
+            Repaint();
         }
 
         #endregion
