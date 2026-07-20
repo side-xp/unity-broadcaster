@@ -51,6 +51,11 @@ namespace SideXP.Broadcaster.EditorOnly
             "Include call stacks",
             "Capture the C# call stack it in the Emitter section of a selected span." +
             "\nNote that capturing a stack per dispatch is costly, and it only affects dispatches recorded while it's on.");
+        private static readonly GUIContent[] s_graduationModeLabels =
+        {
+            new GUIContent("Time grid", "Graduations mark elapsed time."),
+            new GUIContent("Frame grid", "Graduations mark the frames that dispatches occurred in."),
+        };
 
         // Persisted so the setup survives domain reloads. The recorder and filter are runtime objects rebuilt on enable from these.
         [SerializeField] private int _capacity = SpanRecorder.DefaultCapacity;
@@ -63,6 +68,7 @@ namespace SideXP.Broadcaster.EditorOnly
         [SerializeField] private bool _showCommands = true;
         [SerializeField] private bool _showRequests = true;
         [SerializeField] private float _detailHeight = DetailHeight;
+        [SerializeField] private GraduationMode _graduationMode = GraduationMode.Time;
 
         private SpanRecorder _recorder;
         private TimelineFilter _filter;
@@ -245,6 +251,10 @@ namespace SideXP.Broadcaster.EditorOnly
 
                 GUILayout.FlexibleSpace();
 
+                GraduationMode graduationMode = (GraduationMode)EditorGUILayout.Popup((int)_graduationMode, s_graduationModeLabels, EditorStyles.toolbarPopup, GUILayout.Width(92));
+                if (graduationMode != _graduationMode)
+                    _graduationMode = graduationMode;
+
                 bool captureStacks = GUILayout.Toggle(_captureStacks, s_captureStacksLabel, EditorStyles.toolbarButton);
                 if (captureStacks != _captureStacks)
                 {
@@ -315,7 +325,10 @@ namespace SideXP.Broadcaster.EditorOnly
             _scroll = GUI.BeginScrollView(rect, _scroll, viewRect);
             {
                 // Graduations sit behind everything; drawing them first keeps the gridlines under the bars.
-                DrawTimeGraduations(viewRect.width, t0, t1, viewRect.height);
+                if (_graduationMode == GraduationMode.Frames)
+                    DrawFrameGraduations(viewRect.width, t0, t1, viewRect.height);
+                else
+                    DrawTimeGraduations(viewRect.width, t0, t1, viewRect.height);
 
                 // Cascade edges use Handles, which only render on the repaint pass; drawing them before the bars keeps them underneath.
                 if (Event.current.type == EventType.Repaint)
@@ -489,8 +502,7 @@ namespace SideXP.Broadcaster.EditorOnly
         }
 
         // Vertical time graduations behind the bars: faint gridlines at "nice" intervals, each labelled in the top ruler with the elapsed
-        // time from the left edge (the earliest visible dispatch). The X axis is time-based, so these mark time; frame graduations can ride
-        // an optional toggle later.
+        // time from the left edge (the earliest visible dispatch). The X axis is time-based, so these mark time.
         private void DrawTimeGraduations(float width, double t0, double t1, float height)
         {
             double range = t1 - t0;
@@ -512,6 +524,32 @@ namespace SideXP.Broadcaster.EditorOnly
                 float x = MapX(t, t0, t1, width);
                 EditorGUI.DrawRect(new Rect(x, RulerHeight, 1f, height - RulerHeight), GraduationLine);
                 GUI.Label(new Rect(x + 2f, 0f, 60f, RulerHeight), $"{elapsed * scale:0.##} {unit}", EditorStyles.miniLabel);
+            }
+        }
+
+        // Vertical frame graduations behind the bars: a faint gridline at each frame a visible dispatch began in, placed at that dispatch's
+        // time (the X axis is time-based), labelled with the frame number where labels don't crowd. A frame with no dispatch gets no line —
+        // there's no per-frame timestamp to anchor one, and "nothing happened there" is the honest reading.
+        private void DrawFrameGraduations(float width, double t0, double t1, float height)
+        {
+            int lastFrame = int.MinValue;
+            float lastLabelX = float.NegativeInfinity;
+
+            foreach (SpanLayout layout in _layouts)
+            {
+                DispatchSpan span = layout.Recorded.Span;
+                if (span.BeginFrame == lastFrame)
+                    continue;
+                lastFrame = span.BeginFrame;
+
+                float x = MapX(span.BeginTime, t0, t1, width);
+                EditorGUI.DrawRect(new Rect(x, RulerHeight, 1f, height - RulerHeight), GraduationLine);
+
+                if (x - lastLabelX >= 44f)
+                {
+                    GUI.Label(new Rect(x + 2f, 0f, 70f, RulerHeight), $"#{span.BeginFrame}", EditorStyles.miniLabel);
+                    lastLabelX = x;
+                }
             }
         }
 
@@ -1006,6 +1044,9 @@ namespace SideXP.Broadcaster.EditorOnly
 
 
         #region Types
+
+        // Which metric the canvas graduations mark. The X axis stays time-based either way; this only changes the gridlines and labels.
+        private enum GraduationMode { Time, Frames }
 
         private struct SpanLayout
         {
