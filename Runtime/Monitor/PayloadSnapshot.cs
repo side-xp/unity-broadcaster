@@ -29,7 +29,7 @@ namespace SideXP.Broadcaster
 
         /// <summary>
         /// The captured public fields and properties, in reflected order. Empty when the payload has no public members, or when the event
-        /// opted out of capture with <c>[Broadcast(OmitSnapshot = true)]</c>. Never <c>null</c>.
+        /// opted out of capture with <c>[Event(OmitSnapshot = true)]</c>. Never <c>null</c>.
         /// </summary>
         public IReadOnlyList<PayloadField> Fields { get; }
 

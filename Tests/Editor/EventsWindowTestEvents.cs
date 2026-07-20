@@ -6,7 +6,7 @@ namespace SideXP.Broadcaster.Tests
     /// <c>TestEvents.cs</c>: they exercise attribute metadata, empty payloads, non-instantiable types, and open generics.
     /// </summary>
 
-    /// <summary>A signal carrying <c>[Broadcast]</c> metadata, to prove the catalog reads the description, opt-out and hidden flag.</summary>
+    /// <summary>A signal carrying <c>[Event]</c> metadata, to prove the catalog reads the description, opt-out and hidden flag.</summary>
     [Event(Name = "Broadcaster/Tests/" + nameof(DescribedSignal), Description = "A described signal.", OmitSnapshot = true, Hidden = true)]
     internal struct DescribedSignal : ISignal
     {

@@ -27,7 +27,7 @@ namespace SideXP.Broadcaster.EditorOnly
         public string Name { get; }
 
         /// <summary>
-        /// The name to show in the window: the type's <c>[Broadcast(Name = ...)]</c> when it sets one, otherwise <see cref="Name"/>. May be a
+        /// The name to show in the window: the type's <c>[Event(Name = ...)]</c> when it sets one, otherwise <see cref="Name"/>. May be a
         /// <c>/</c>-separated path.
         /// </summary>
         public string DisplayName { get; }
@@ -35,14 +35,14 @@ namespace SideXP.Broadcaster.EditorOnly
         /// <summary>The namespace the type lives in, or an empty string for the global namespace.</summary>
         public string Namespace { get; }
 
-        /// <summary>The description from the type's <c>[Broadcast]</c> attribute, or <c>null</c> when it carries none.</summary>
+        /// <summary>The description from the type's <c>[Event]</c> attribute, or <c>null</c> when it carries none.</summary>
         public string Description { get; }
 
-        /// <summary>Whether the type opted out of payload capture with <c>[Broadcast(OmitSnapshot = true)]</c>.</summary>
+        /// <summary>Whether the type opted out of payload capture with <c>[Event(OmitSnapshot = true)]</c>.</summary>
         public bool OmitSnapshot { get; }
 
         /// <summary>
-        /// Whether the type asked to be kept out of the catalog by default with <c>[Broadcast(Hidden = true)]</c>.
+        /// Whether the type asked to be kept out of the catalog by default with <c>[Event(Hidden = true)]</c>.
         /// </summary>
         public bool Hidden { get; }
 

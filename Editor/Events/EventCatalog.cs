@@ -144,7 +144,7 @@ namespace SideXP.Broadcaster.EditorOnly
         /// </summary>
         /// <param name="entries">The entries to filter.</param>
         /// <param name="search">The text to match, or null/empty to match everything.</param>
-        /// <param name="includeHidden">By default, entries flagged with <c>[Broadcast(Hidden = true)]</c> are left out regardless of the
+        /// <param name="includeHidden">By default, entries flagged with <c>[Event(Hidden = true)]</c> are left out regardless of the
         /// search. If enabled, hidden entries are kept like any other.
         /// </param>
         /// <returns>The matching entries, in their original order.</returns>

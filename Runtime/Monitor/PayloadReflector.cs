@@ -51,7 +51,7 @@ namespace SideXP.Broadcaster
         #region Public API
 
         /// <summary>
-        /// Captures a snapshot of <paramref name="payload"/>. When the event opted out with <c>[Broadcast(OmitSnapshot = true)]</c>, the
+        /// Captures a snapshot of <paramref name="payload"/>. When the event opted out with <c>[Event(OmitSnapshot = true)]</c>, the
         /// snapshot carries only the type name (no summary, no fields).
         /// </summary>
         /// <typeparam name="T">The exact event type. Members are read off this type, matching the bus's exact-type dispatch.</typeparam>
