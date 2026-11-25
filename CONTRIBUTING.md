@@ -148,14 +148,15 @@ As mentioned in the [*Suggesting enhancements or features*](https://github.com/s
 
 Releases are fully automated and handled internally (contributors don't need to do anything special beyond writing good commit messages).
 
-We use [Conventional Commits](https://www.conventionalcommits.org/) together with [Release Please](https://github.com/googleapis/release-please):
+We use [Conventional Commits](https://www.conventionalcommits.org/) together with [python-semantic-release](https://python-semantic-release.readthedocs.io):
 
-1. When commits land on `main` (or `master`), **Release Please** opens and maintains a "release PR" that bumps the version in `package.json` and updates `CHANGELOG.md`, based on the commits since the last release:
-    - `fix:` → patch (`x.y.Z`)
+1. When commits land on `main` (or `master`), **python-semantic-release** reads the commits since the last release to decide whether a new version is due, and which one:
+    - `fix:` or `perf:` → patch (`x.y.Z`)
     - `feat:` → minor (`x.Y.z`)
     - `feat!:` or a `BREAKING CHANGE:` footer → major (`X.y.z`)
-2. When the core team merges that release PR, a Git tag and a **GitHub Release** are created automatically.
-3. Publishing the Release triggers our **Release & docs** workflow, which:
+    - any other type (`docs:`, `chore:`, `refactor:`, ...) → no release
+2. If a release is due, it bumps the version in `package.json`, updates `CHANGELOG.md`, pushes a release commit and its Git tag, and creates the **GitHub Release**, all in the same run (no release PR to merge).
+3. The same **Release** workflow then:
     - generates the API documentation from the source,
     - builds and deploys the documentation website to GitHub Pages,
     - attaches these assets to the Release:

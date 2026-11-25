@@ -1,0 +1,12 @@
+# Sidebar order for the docs site, read by Zensical's built-in awesome-nav plugin (see zensical.toml).
+# Subfolders keep their automatic order.
+# https://lukasgeiter.github.io/mkdocs-awesome-nav/features/nav/
+nav:
+  # The plugin sorts the index like any other page, so pin it first.
+  - README.md
+  - installation.md
+  # Everything not listed explicitly, in the default order.
+  - "*"
+  # Generated C# API reference, kept last. Absent when the package ships no C#: the build then logs
+  # a harmless "doesn't match any files" warning.
+  - api

@@ -1,0 +1,8 @@
+# python-semantic-release configuration, used by the `release` job of workflows/release.yml.
+# Lives under .github/ so Unity never imports it and `git archive` leaves it out (export-ignore).
+# Everything not set here uses PSR's defaults:
+# https://python-semantic-release.readthedocs.io/en/latest/configuration/configuration.html
+
+[semantic_release]
+# Unity reads the package version from package.json, so that's the file to bump.
+version_variables = ["package.json:version"]

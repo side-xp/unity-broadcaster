@@ -1,134 +1,147 @@
-# This is the package's release pipeline. It runs on every push to the release branch (main/master):
-#   1. release-please:  maintains a "release PR" and, when that PR is merged, creates the tag & GitHub Release.
-#   2. generate-docs:    generates the API reference as MarkDown files ONCE (using the SideXP.Instadoc CLI tool).
-#   3. deploy-pages:     builds the documentation website with Zensical and deploys it to GitHub Pages.
-#   4. release-assets:   packages the source + docs into ZIP/Tarball archives and attaches them to the Release.
+# Single workflow that drives versioning, releases, documentation and release assets.
 #
-# Everything lives in a single workflow on purpose: when release-please creates the Release using the default
-# GITHUB_TOKEN, that "release: published" event does NOT trigger other workflows (GitHub's recursion guard). So
-# instead of reacting to the Release event from a separate workflow, the downstream jobs run in the SAME run,
-# gated on release-please's "release_created" output.
+# Flow:
+#   1. release - on every push to main/master, python-semantic-release reads the Conventional
+#                Commits since the last tag. If any is releasable (feat, fix, perf, breaking), it
+#                bumps package.json's version, updates CHANGELOG.md, pushes a release commit + tag
+#                and creates the GitHub Release. Config: .github/release.toml.
+#   2. build   - generates the C# API reference with SideXP.Instadoc (skipped automatically when the
+#                package ships no C# sources, e.g. asset-only packages), builds the Zensical site and,
+#                after a release, attaches source + documentation archives to the Release.
+#   3. deploy  - deploys the site built by `build` to GitHub Pages.
 #
-# Make sure you have selected "GitHub Actions" mode in Settings > Pages.
-# After running this workflow, the website should be accessible at https://[username].github.io/[repository-name]
+# Because the release commit, tag and Release are created with the default GITHUB_TOKEN, they do
+# NOT trigger other workflows (no release loop). So docs + assets run in THIS run, gated on the
+# release job's output, and check out the release tag (the pushed commit predates the version bump).
 name: Release
 
-# Run on every push to the release branch. release-please decides whether that push results in a Release.
-# The manual "workflow_dispatch" trigger rebuilds & redeploys the docs without cutting a release
-# (the release-please and release-assets jobs are skipped in that case).
 on:
   push:
     branches:
       - main
       - master
+  # Allows rebuilding/redeploying the docs without cutting a release.
   workflow_dispatch:
 
 jobs:
-  # Maintain the release PR and, when it is merged, create the tag & GitHub Release.
-  # Exposes "release_created" / "tag_name" so the downstream jobs know whether (and what) was released.
-  release-please:
-    name: Release Please
+  # 0. Template guard
+  # Skips the whole workflow while the repo is still an unconfigured template, on two fronts:
+  #   - the template repo itself (`is_template`), and
+  #   - a repo just generated from the template whose package.json still holds `@todo` placeholders
+  #     (you can't release a package literally named `com.side-xp.@todo`, nor publish @todo docs).
+  # Once `@todo` is gone from package.json, the workflow activates automatically.
+  guard:
+    name: Check template configured
     runs-on: ubuntu-latest
-    if: "!github.event.repository.is_template && github.event_name == 'push'"
-    permissions:
-      contents: write
-      pull-requests: write
+    if: "!github.event.repository.is_template"
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      configured: ${{ steps.check.outputs.configured }}
     steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        with:
-          release-type: node
-
-  # Generate the API reference as MarkDown files ONCE, and share it with the downstream jobs as an artifact.
-  # Runs when a Release was just created, or on a manual docs rebuild.
-  generate-docs:
-    name: Generate API docs
-    runs-on: ubuntu-latest
-    needs: release-please
-    if: >-
-      always()
-      && !github.event.repository.is_template
-      && (
-        (needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true')
-        || github.event_name == 'workflow_dispatch'
-      )
-    permissions:
-      contents: read
-
-    steps:
-      # Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v7
+      - name: Detect unconfigured template
+        id: check
+        run: |
+          if grep -q '@todo' package.json; then
+            echo "package.json still contains @todo placeholders - template not configured yet; skipping."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      # Install the .NET SDK, required to run the SideXP.Instadoc CLI tool.
+  # 1. Versioning & releases
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    needs: guard
+    if: needs.guard.outputs.configured == 'true' && github.event_name == 'push'
+    # Queue (never cancel) releases, so two quick pushes can't compute a version from the same history.
+    concurrency:
+      group: ${{ github.workflow }}-release-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      # Check out the branch (not a detached sha) so the release commit can be pushed to it.
+      # No full history needed here: python-semantic-release unshallows the clone itself.
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+
+      # If the branch moved since this run was triggered, release only what was pushed. The push of
+      # the release commit then fails as non-fast-forward, and the newer run releases the rest.
+      - name: Pin to the triggering commit
+        run: git reset --hard ${{ github.sha }}
+
+      # Docker action: brings its own Python, so no setup-python here.
+      - name: Release
+        id: release
+        uses: python-semantic-release/python-semantic-release@v10.7.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          config_file: .github/release.toml
+          git_committer_name: github-actions[bot]
+          git_committer_email: 41898282+github-actions[bot]@users.noreply.github.com
+
+  # 2. Documentation & release assets
+  build:
+    name: Build docs & assets
+    runs-on: ubuntu-latest
+    needs: [guard, release]
+    # Run after a release was just cut, or on a manual dispatch. `always()` lets this run on
+    # workflow_dispatch even though `release` is skipped then; the guard check still applies.
+    if: |
+      always() &&
+      needs.guard.outputs.configured == 'true' &&
+      (needs.release.outputs.released == 'true' || github.event_name == 'workflow_dispatch')
+    permissions:
+      # Attach the archives to the Release.
+      contents: write
+    steps:
+      # The release tag holds the bumped version and updated changelog; empty on manual dispatch
+      # (falls back to the run's ref).
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      # --- C# API reference ---
+
       - name: Set up .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.x'
 
-      # Install the SideXP.Instadoc CLI tool as a global .NET tool, and make sure its install location is on PATH.
       - name: Install SideXP.Instadoc
+        run: dotnet tool install --global SideXP.Instadoc
+
+      # Auto-detect the package's C# source folders so this works for runtime-only, editor-only,
+      # hybrid, demo and asset-only packages with no per-package edits. If no C# sources exist,
+      # API generation is skipped and the docs build still proceeds.
+      - name: Generate API reference
         run: |
-          dotnet tool install --global SideXP.Instadoc
-          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+          inputs=""
+          for d in Runtime Editor Demos; do
+            if [ -d "$d" ] && find "$d" -name '*.cs' -print -quit | grep -q .; then
+              inputs="$inputs --input $d"
+            fi
+          done
+          if [ -n "$inputs" ]; then
+            echo "Generating API reference from:$inputs"
+            instadoc $inputs --output "Documentation~/api"
+          else
+            echo "No C# sources found - skipping API reference generation."
+          fi
 
-      # Generate the API reference as MarkDown files into Documentation~/api/ directly from the C# source.
-      # No compilation is needed: the tool scans the .cs files with Roslyn.
-      # This package ships runtime code only, so only the Runtime/ folder is scanned.
-      - name: Generate API docs
-        run: |
-          instadoc \
-            --input Runtime \
-            --output "Documentation~/api" \
-            --grouping namespace \
-            --exclude "**/*.Generated.cs" \
-            --quiet
+      # --- Documentation site ---
 
-      # Upload the generated MarkDown as an artifact, so the deploy-pages and release-assets jobs can reuse it
-      # without regenerating. The artifact is only needed within this run, hence the short retention.
-      - name: Upload API docs artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: api-docs
-          path: "Documentation~/api"
-          retention-days: 1
-
-  # Build the documentation website with Zensical and deploy it to GitHub Pages.
-  deploy-pages:
-    name: Build & deploy docs
-    runs-on: ubuntu-latest
-    needs: generate-docs
-    if: "always() && needs.generate-docs.result == 'success'"
-    permissions:
-      id-token: write
-      pages: write
-      contents: read
-    # Bind this job to the "github-pages" deployment environment, and expose the deployed URL on it.
-    # This makes the environment (with a clickable link to the docs) show up on the repository's main page,
-    # in the repo's Deployments/Environments view, and on this job's node in the Actions run graph.
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    # Allow only one concurrent Pages deployment, without cancelling in-progress ones.
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-
-    steps:
-      # Checkout repository (provides the rest of Documentation~/: guides, images, zensical.toml, ...)
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      # Build the documentation index page from the repo-root README, so it can never drift from it.
-      # Documentation~/README.md is NOT committed (it's gitignored): it is generated here. The sed
-      # expressions interpret our HTML-comment markers: drop the `docs:remove` blocks (shown only on
-      # GitHub) and un-comment the `docs:only` blocks (hidden on GitHub, shown on the docs site). The last
-      # expression rewrites links that point into Documentation~/ on GitHub so they resolve on the site,
-      # where the index already lives at the Documentation~/ root.
-      - name: Generate docs index from README
+      # Generate the docs index (Documentation~/README.md) from the repo-root README.md.
+      # See the docs:remove / docs:only markers in README.md.
+      - name: Generate docs index
         run: |
           sed -e '/<!-- docs:remove:start -->/,/<!-- docs:remove:end -->/d' \
               -e '/<!-- docs:only:start/d' \
@@ -136,118 +149,75 @@ jobs:
               -e 's#\./Documentation~/#./#g' \
               README.md > "Documentation~/README.md"
 
-      # Restore the generated API docs (from the generate-docs job) into Documentation~/api/.
-      - name: Download API docs artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: api-docs
-          path: "Documentation~/api"
-
-      # Install Python for this workflow
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 
-      # Install our Zensical theme. pip pulls in Zensical itself automatically, since the theme
-      # declares it as a dependency. Track "main" for now; once the theme cuts a release, pin to a
-      # tag for reproducible builds, e.g. pip install "git+https://github.com/side-xp/py-zensical-theme@v0.1.0"
-      - name: Install Zensical theme
+      - name: Install Zensical + side-xp theme
         run: pip install "git+https://github.com/side-xp/py-zensical-theme"
 
-      # Build the website. zensical.toml lives inside Documentation~/ and sets "docs_dir = ."
-      # (paths are resolved relative to the config file), so this builds the whole Documentation~/
-      # tree in place and writes the static site to Documentation~/site/.
-      - name: Build docs website
+      - name: Build site
         run: zensical build -f "Documentation~/zensical.toml"
 
-      # Configure GitHub Pages
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v6
+        uses: actions/configure-pages@v5
 
-      # Upload the Zensical build output (written to Documentation~/site/ per zensical.toml's site_dir)
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: "Documentation~/site"
+          path: Documentation~/site
 
-      # Deploy the website to GitHub Pages.
-      # The "deployment" id exposes the page_url output, consumed by the job's environment.url above.
+      # --- Release archives (only when a release was cut, never on manual dispatch) ---
+
+      - name: Read package name
+        if: needs.release.outputs.released == 'true'
+        id: pkg
+        run: echo "name=$(jq -r .name package.json)" >> "$GITHUB_OUTPUT"
+
+      # Source archives, honoring .gitattributes `export-ignore`. Built from the committed tree, so
+      # the generated docs above never end up in them.
+      - name: Build source archives
+        if: needs.release.outputs.released == 'true'
+        run: |
+          git archive --format=zip    -o "${{ steps.pkg.outputs.name }}.zip"    HEAD
+          git archive --format=tar.gz -o "${{ steps.pkg.outputs.name }}.tar.gz" HEAD
+
+      # Zip Documentation~ (incl. the generated api/ and README.md, excl. the site config and the build
+      # output) into Documentation_<tag>.zip.
+      - name: Build documentation archive
+        if: needs.release.outputs.released == 'true'
+        working-directory: Documentation~
+        run: |
+          zip -r -q "../Documentation_${{ needs.release.outputs.tag }}.zip" . \
+            -x "zensical.toml" -x ".nav.yml" -x "site/*" -x ".cache/*"
+
+      - name: Upload release assets
+        if: needs.release.outputs.released == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.release.outputs.tag }}
+          files: |
+            ${{ steps.pkg.outputs.name }}.zip
+            ${{ steps.pkg.outputs.name }}.tar.gz
+            Documentation_${{ needs.release.outputs.tag }}.zip
+
+  # 3. GitHub Pages deployment
+  # Kept as its own job so the Pages permissions and environment stay apart from `build`'s
+  # `contents: write`.
+  deploy:
+    name: Deploy docs
+    runs-on: ubuntu-latest
+    needs: build
+    # `always()` because `release` is skipped on manual dispatch, which would otherwise skip this too.
+    if: always() && needs.build.result == 'success'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-      # Display the actual deployed URL in the logs (taken from the deployment output, not hardcoded).
-      - name: Feedback
-        run: |
-          echo "Documentation website successfully deployed at ${{ steps.deployment.outputs.page_url }}"
-
-  # Package the source + docs into ZIP/Tarball archives and attach them to the Release that was just created.
-  # Skipped on manual (workflow_dispatch) runs, since there is no Release to attach assets to.
-  release-assets:
-    name: Create Release assets
-    runs-on: ubuntu-latest
-    needs: [release-please, generate-docs]
-    if: >-
-      always()
-      && needs.generate-docs.result == 'success'
-      && needs.release-please.outputs.release_created == 'true'
-    permissions:
-      contents: write
-
-    steps:
-      # Checkout repository
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      # Build the documentation index page from the repo-root README (see the deploy-pages job for details).
-      # Needed here so the generated index is included in the docs archive below. The source archive is built
-      # with `git archive HEAD`, so this untracked file never leaks into it.
-      - name: Generate docs index from README
-        run: |
-          sed -e '/<!-- docs:remove:start -->/,/<!-- docs:remove:end -->/d' \
-              -e '/<!-- docs:only:start/d' \
-              -e '/docs:only:end -->/d' \
-              -e 's#\./Documentation~/#./#g' \
-              README.md > "Documentation~/README.md"
-
-      # Package the source as ZIP and Tarball archives, using `git archive` so that only tracked files are included.
-      # This honors the `export-ignore` attributes in .gitattributes (which exclude .github/, .vscode/, etc.), and
-      # naturally leaves out the generated Documentation~/api/ folder since it is untracked (gitignored) -- keeping
-      # the package archives lean, matching the committed package's contents.
-      # Archives are named [package-name].zip / [package-name].tar.gz, reading the name from package.json.
-      - name: Package source archives
-        run: |
-          mkdir -p dist
-          NAME=$(jq -r .name "package.json")
-          git archive --format=zip    -o "dist/$NAME.zip"    HEAD
-          git archive --format=tar.gz -o "dist/$NAME.tar.gz" HEAD
-
-      # Restore the generated API docs (from the generate-docs job) into Documentation~/api/, so they are included
-      # in the docs archive below.
-      - name: Download API docs artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: api-docs
-          path: "Documentation~/api"
-
-      # Package the documentation (including the freshly generated MarkDown api/ files) as a ZIP archive.
-      # That archive file is named Documentation_vX.Y.Z.zip, using the release tag from release-please.
-      # This is built manually (not via `git archive`) precisely because it must include the untracked api/ folder.
-      # The zensical.toml config and any built site/ output are excluded: the archive ships MarkDown only.
-      - name: Package docs archive
-        run: |
-          mkdir -p dist release/docs
-          cp -a "Documentation~" "release/docs"
-          rm -f "release/docs/Documentation~/zensical.toml"
-          rm -rf "release/docs/Documentation~/site"
-          cd release/docs
-          zip -r -q "${{ github.workspace }}/dist/Documentation_${{ needs.release-please.outputs.tag_name }}.zip" ./*
-
-      # Upload all archives (everything in dist/) as assets on the Release that release-please just created.
-      # The tag_name is required since this run is triggered by a push, not by the Release event itself.
-      - name: Upload Release assets
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: dist/*
